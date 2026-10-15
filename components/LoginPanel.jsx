@@ -30,7 +30,7 @@ export default function LoginPanel({tab='client',onTabChange=()=>{}}) {
            <label>Business email address<input type="email" autoComplete="email" placeholder="name@company.com" value={email} onChange={e=>setEmail(e.target.value)} required/></label>
            {sent && <label>Six-digit access code<input inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={code} placeholder="Enter your code" onChange={e=>setCode(e.target.value)} required/></label>}
            <button disabled={busy} className="button primary full">{busy?'Please wait…':sent?'Open my billing center':'Send secure access code'} <span aria-hidden="true">↗</span></button>
-           {sent && <button type="button" className="inline-link login-reset" onClick={()=>setSent(false)}>Use a different email</button>}
+           {sent && <div className="login-reset-actions"><button type="button" className="inline-link login-reset" onClick={()=>{setSent(false);setCode('');setMsg('')}}>Use a different email</button><button type="button" className="inline-link login-reset" disabled={busy} onClick={async()=>{setBusy(true);setMsg('');try{const x=await api('client/request-code',{email});setMsg(x.message)}catch(e){setMsg(e.message)}finally{setBusy(false)}}}>Resend access code</button></div>}
          </form>
        ) : (
          <form className="login-form" onSubmit={admin}>

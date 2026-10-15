@@ -89,9 +89,10 @@ export async function POST(req,{params}){
     const contact=safeString(b.email,250).toLowerCase();const client=await one('select id,legal_name,billing_email,locale from client_accounts where lower(billing_email)=$1',[contact]);
     if(client){const code=String(crypto.randomInt(100000,999999));const hash=hexhash(`${code}:${process.env.SESSION_SECRET}`);
      await q("insert into access_codes(client_id,email,code_hash,expires_at) values($1,$2,$3,now()+interval '10 minutes')",[client.id,contact,hash]);
-     await email({eventKey:`login:${client.id}:${Date.now()}`,template:'LOGIN_CODE',to:contact,company:client.legal_name,code,locale:client.locale});
+     const delivered=await email({eventKey:`login:${client.id}:${Date.now()}`,template:'LOGIN_CODE',to:contact,company:client.legal_name,code,locale:client.locale});
+     if(!delivered)throw Object.assign(Error('Email delivery is temporarily unavailable. Please contact MDS billing support.'),{status:503});
     }
-    return ok({message:'If this email is registered, a sign-in code will arrive shortly.'});
+    return ok({message:'If this email belongs to an authorized MDS billing client, a sign-in code will arrive shortly. If you receive nothing, contact billing to verify your registered address.'});
   }
   if(p==='client/verify-code'){
     await rateLimit('verify-code',10,15);const contact=safeString(b.email,250).toLowerCase();
