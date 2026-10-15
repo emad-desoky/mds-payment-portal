@@ -1,8 +1,9 @@
 import pg from 'pg';
+import { postgresOptions } from '../lib/pg-connect.js';
 import crypto from 'node:crypto';
 const conn=process.env.DATABASE_MIGRATE_URL||process.env.DATABASE_URL;
 if(!conn){console.error('Missing database configuration');process.exit(1)}
-const pool=new pg.Pool({connectionString:conn,ssl:{rejectUnauthorized:true},max:1,connectionTimeoutMillis:15000});
+const pool=new pg.Pool({...postgresOptions(conn),max:1});
 const schema=`
 create table if not exists client_accounts (
  id uuid primary key default gen_random_uuid(), legal_name text not null, billing_email text not null, phone text, billing_address text, tax_id text,
