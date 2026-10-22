@@ -18,7 +18,7 @@ Initial Finance username/password are injected only at deployment. The initial c
 
 ## Financial control
 
-Only finance-approved, client-specific offers can generate private links. Unapproved ratecard source files are not public. Live transactions require `KASHIER_MODE=live` and `ENABLE_LIVE_PAYMENTS=true`, plus organizational Finance sign-off. Server callbacks determine paid states. Failed-payment auto-retries, automatic term extension, VAT claims, and public catalog publishing are off until approved.
+Only finance-approved, client-specific offers can generate private links. Unapproved ratecard source files are not public. Live transactions require `KASHIER_MODE=live` and `ENABLE_LIVE_PAYMENTS=true`, plus organizational Finance sign-off. Keep `ENABLE_RECURRING_CHARGES=false` for first live checkout release; enabling real recurring charges also requires a Vercel `CRON_SECRET`, account-approved tokenization, and a separately approved renewal launch. The renewal job only processes subscriptions whose initial payment was made in live mode. Server callbacks determine paid states. Failed-payment auto-retries, automatic term extension, VAT claims, and public catalog publishing are off until approved.
 
 ## Operational routes
 
