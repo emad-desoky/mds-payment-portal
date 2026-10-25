@@ -8,7 +8,12 @@ import {email} from '../../../lib/email.js';
 import {receiveWebhook} from '../../../lib/webhook.js';
 export const runtime='nodejs';export const dynamic='force-dynamic';
 function ok(data={},status=200){return NextResponse.json({ok:true,...data},{status,headers:{'Cache-Control':'no-store'}});}
-function err(e){return NextResponse.json({ok:false,error:e.status?e.message:'Unable to complete this request',code:e.code||undefined},{status:e.status||500,headers:{'Cache-Control':'no-store'}});}
+function err(e,route='unknown'){
+ if(!e?.status||e.status>=500){
+  console.error('[MDS:api:failure]',{route,status:e?.status||500,code:e?.code||undefined,reason:String(e?.message||'Unknown server error').slice(0,200)});
+ }
+ return NextResponse.json({ok:false,error:e?.status?e.message:'Unable to complete this request',code:e?.code||undefined},{status:e?.status||500,headers:{'Cache-Control':'no-store'}});
+}
 const path=p=>p.route.join('/');
 const json=async(req)=>{const body=await req.json();if(!body||typeof body!=='object'||Array.isArray(body))throw Object.assign(Error('Invalid request'),{status:400});return body;};
 async function offerFromToken(token){if(!token||token.length<24||token.length>200)return null;return one(`select o.*,c.legal_name,c.billing_email,c.locale from offers o join client_accounts c on c.id=o.client_id where o.link_hash=$1 and o.status='SENT' and o.link_expires_at>now()`,[hexhash(token)]);}
@@ -62,7 +67,7 @@ export async function GET(req,{params}){
    return new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Robots-Tag':'noindex'}});
   }
   return err(Object.assign(Error('Not found'),{status:404}));
- }catch(e){return err(e)}
+ }catch(e){return err(e,p)}
 }
 export async function POST(req,{params}){
  const p=path(await params);
@@ -188,5 +193,5 @@ export async function POST(req,{params}){
    }
   }
   return err(Object.assign(Error('Not found'),{status:404}));
- }catch(e){return err(e)}
+ }catch(e){return err(e,p)}
 }
