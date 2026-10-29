@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {q,one,transaction} from '../../../lib/db.js';
 import {getUser,requireRole,sessionCookie,clearSessionCookie,checkOrigin,hashPassword,verifyPassword,rateLimit,randomToken,hexhash,safeString,audit} from '../../../lib/security.js';
-import {calculate,money} from '../../../lib/billing.js';
-import {startPayment,gatewayMode,refundPayment,verifySession} from '../../../lib/kashier.js';
+import {calculate,money,TERM_MONTHS,CADENCE_MONTHS} from '../../../lib/billing.js';
+import {startPayment,gatewayMode,recurringChargesEnabled,refundPayment,verifySession} from '../../../lib/kashier.js';
 import {email} from '../../../lib/email.js';
 import {receiveWebhook} from '../../../lib/webhook.js';
 export const runtime='nodejs';export const dynamic='force-dynamic';
@@ -56,7 +56,13 @@ export async function GET(req,{params}){
    if(p==='admin/support')return ok({tickets:(await q('select * from support_tickets order by created_at desc limit 250')).rows});
    if(p==='admin/audit')return ok({events:(await q('select action,entity_type,entity_id,details,occurred_at from audit_events order by occurred_at desc limit 250')).rows});
    if(p==='admin/reconciliation')return ok({exceptions:(await q('select * from reconciliation_exceptions order by created_at desc limit 250')).rows,webhooks:(await q('select * from webhook_events order by received_at desc limit 100')).rows});
-   if(p==='admin/subscriptions')return ok({subscriptions:(await q('select s.id,s.term_code,s.cadence_code,s.recurring_amount,s.currency,s.cycles_remaining,s.next_charge_at,s.status,c.legal_name from subscriptions s join client_accounts c on c.id=s.client_id order by s.created_at desc limit 250')).rows});
+   if(p==='admin/subscriptions')return ok({
+     subscriptions:(await q(`select s.id,s.offer_id,s.term_code,s.cadence_code,s.recurring_amount,s.currency,s.cycles_remaining,s.next_charge_at,s.term_end,s.auto_renew,s.last_payment_at,s.status,c.legal_name,o.title,p.mode as initial_mode,
+       (s.token_encrypted is not null) as card_saved,(s.agreement_id is not null) as agreement_saved
+       from subscriptions s join client_accounts c on c.id=s.client_id join offers o on o.id=s.offer_id
+       left join payment_requests p on p.id=s.initial_request_id order by s.created_at desc limit 250`)).rows,
+     billingOperations:{renewalsEnabled:recurringChargesEnabled()&&!!process.env.CRON_SECRET,cronConfigured:!!process.env.CRON_SECRET,liveMode:gatewayMode()==='live'}
+    });
   }
   if(p.startsWith('invoices/')){
    const id=p.split('/')[1];const user=await requireRole(['finance_admin','client_owner']);
@@ -150,14 +156,49 @@ export async function POST(req,{params}){
     if(!b.approval_reference||!b.approved_by||!b.commercial_reference||!b.title)throw Object.assign(Error('Approved commercial reference, approver, offer reference and title are required'),{status:400});
     if(!['EGP','USD'].includes(b.currency))throw Object.assign(Error('Currency is invalid'),{status:400});
     const vals=[b.professional_fee,b.setup_fee,b.pass_through_fee].map(Number);if(vals.some(n=>!Number.isFinite(n)||n<0))throw Object.assign(Error('Invalid fee'),{status:400});
-    const allowed=b.transaction_family==='RECURRING'?['MONTHLY_FLEX','COMMIT_3M','COMMIT_6M','COMMIT_12M'].filter(x=>b.allowed_terms?.includes(x)):['MONTHLY_FLEX'];
-    if(!allowed.length)throw Object.assign(Error('Choose at least one commitment'),{status:400});
-    const matrix=Object.fromEntries(allowed.map(x=>[x,(Array.isArray(b.cadence_matrix?.[x])?b.cadence_matrix[x]:[]).filter(c=>['MONTHLY','QUARTERLY','SEMIANNUAL','ANNUAL_UPFRONT'].includes(c))]));
-    if(Object.values(matrix).some(a=>!a.length))throw Object.assign(Error('Select permitted billing schedules'),{status:400});
-    const mode=b.transaction_family==='RECURRING'?'RECURRING':'ONE_TIME';
-    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,approval_reference,approved_by,approved_at,status)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
+    const recurring=b.transaction_family==='RECURRING';
+    const allowed=recurring?['MONTHLY_FLEX','COMMIT_3M','COMMIT_6M','COMMIT_12M'].filter(x=>Array.isArray(b.allowed_terms)&&b.allowed_terms.includes(x)):['MONTHLY_FLEX'];
+    if(!allowed.length)throw Object.assign(Error('Choose at least one commitment term'),{status:400});
+    const matrix=Object.fromEntries(allowed.map(t=>{
+      const chosen=Array.isArray(b.cadence_matrix?.[t])?b.cadence_matrix[t]:[];
+      const unique=[...new Set(chosen)];
+      if(unique.some(c=>!CADENCE_MONTHS[c]||CADENCE_MONTHS[c]>TERM_MONTHS[t]||TERM_MONTHS[t]%CADENCE_MONTHS[c]!==0))
+        throw Object.assign(Error('A billing schedule is incompatible with its commitment term'),{status:400});
+      return [t,unique];
+    }));
+    if(Object.values(matrix).some(a=>!a.length))throw Object.assign(Error('Choose at least one billing schedule for each enabled term'),{status:400});
+    const mode=recurring?'RECURRING':'ONE_TIME';
+    const rollingMonthly=recurring&&allowed.includes('MONTHLY_FLEX')&&b.auto_renew===true;
+    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,approval_reference,approved_by,approved_at,status)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),rollingMonthly,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
     await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,currency:b.currency});return ok({offer:row});
+   }
+   if(p==='admin/remove-offer'){
+    const id=safeString(b.offer_id,60);
+    if(!/^[0-9a-f-]{36}$/i.test(id))throw Object.assign(Error('Invalid offer'),{status:400});
+    const removed=await transaction(async(c)=>{
+      const offer=(await c.query('select id,status from offers where id=$1 for update',[id])).rows[0];
+      if(!offer)throw Object.assign(Error('Offer not found'),{status:404});
+      if(offer.status==='ARCHIVED')return 'archived';
+      const active=(await c.query("select count(*)::int n from subscriptions where offer_id=$1 and status in ('ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','PENDING_RENEWAL_PAYMENT')",[id])).rows[0].n;
+      if(active>0)throw Object.assign(Error('This offer has an active billing agreement. Stop future charges in Subscriptions before removing it.'),{status:409});
+      const linked=(await c.query('select count(*)::int n from payment_requests where offer_id=$1',[id])).rows[0].n;
+      const subscriptions=(await c.query('select count(*)::int n from subscriptions where offer_id=$1',[id])).rows[0].n;
+      const action=linked||subscriptions?'OFFER_ARCHIVED':'OFFER_DELETED';
+      if(action==='OFFER_ARCHIVED')await c.query("update offers set status='ARCHIVED',link_hash=null,link_expires_at=null where id=$1",[id]);
+      else await c.query('delete from offers where id=$1',[id]);
+      await c.query("insert into audit_events(actor_id,action,entity_type,entity_id,details) values($1,$2,'offer',$3,$4::jsonb)",[user.id,action,id,JSON.stringify({linkedPayments:linked,linkedSubscriptions:subscriptions})]);
+      return action==='OFFER_ARCHIVED'?'archived':'deleted';
+    });
+    return ok({result:removed});
+   }
+   if(p==='admin/stop-renewals'){
+    const id=safeString(b.subscription_id,60);
+    if(!/^[0-9a-f-]{36}$/i.test(id))throw Object.assign(Error('Invalid agreement'),{status:400});
+    const updated=await one("update subscriptions set status='CANCELLED',cycles_remaining=0,next_charge_at=null,auto_renew=false where id=$1 and status in ('ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','RENEWAL_REVIEW_REQUIRED') returning id,offer_id",[id]);
+    if(!updated)throw Object.assign(Error('Agreement cannot be stopped while payment is processing, or it has already ended'),{status:409});
+    await audit(user,'FUTURE_COLLECTIONS_STOPPED','subscription',id,{offerId:updated.offer_id});
+    return ok({status:'CANCELLED'});
    }
    if(p==='admin/send-offer'){
     const item=await one("select o.*,c.legal_name,c.billing_email,c.locale from offers o join client_accounts c on c.id=o.client_id where o.id=$1 and o.status in('APPROVED','SENT')",[b.offer_id]);

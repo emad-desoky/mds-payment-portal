@@ -51,3 +51,21 @@ test('Kashier live session rejection surfaces safe HTTP diagnostics instead of a
   names.forEach((key,i)=>{if(originals[i]===undefined)delete process.env[key];else process.env[key]=originals[i]});
  }
 });
+
+test('rolling Monthly Flex bills monthly but has no multi-month commitment',()=>{
+ const offer={...sample,allowed_terms:['MONTHLY_FLEX'],cadence_matrix:{MONTHLY_FLEX:['MONTHLY']},auto_renew:true};
+ const quote=calculate(offer,'MONTHLY_FLEX','MONTHLY');
+ assert.equal(quote.termMonths,1);
+ assert.equal(quote.cycles,12);
+ assert.equal(quote.cycleMonths,1);
+ assert.equal(quote.rollingMonthly,true);
+ assert.ok(quote.nextPaymentDate);
+ assert.equal(quote.autoRenew,true);
+});
+test('Monthly Flex without approved renewal remains a single payment',()=>{
+ const offer={...sample,allowed_terms:['MONTHLY_FLEX'],cadence_matrix:{MONTHLY_FLEX:['MONTHLY']},auto_renew:false};
+ const quote=calculate(offer,'MONTHLY_FLEX','MONTHLY');
+ assert.equal(quote.cycles,1);
+ assert.equal(quote.rollingMonthly,false);
+ assert.equal(quote.nextPaymentDate,null);
+});
