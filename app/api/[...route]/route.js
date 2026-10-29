@@ -182,6 +182,8 @@ export async function POST(req,{params}){
       if(offer.status==='ARCHIVED')return 'archived';
       const active=(await c.query("select count(*)::int n from subscriptions where offer_id=$1 and status in ('ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','PENDING_RENEWAL_PAYMENT')",[id])).rows[0].n;
       if(active>0)throw Object.assign(Error('This offer has an active billing agreement. Stop future charges in Subscriptions before removing it.'),{status:409});
+      const pending=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status='PROCESSING' and created_at>now()-interval '30 minutes'",[id])).rows[0].n;
+      if(pending>0)throw Object.assign(Error('A checkout for this offer is still being prepared or processed. Wait for it to finish before removing the offer.'),{status:409});
       const linked=(await c.query('select count(*)::int n from payment_requests where offer_id=$1',[id])).rows[0].n;
       const subscriptions=(await c.query('select count(*)::int n from subscriptions where offer_id=$1',[id])).rows[0].n;
       const action=linked||subscriptions?'OFFER_ARCHIVED':'OFFER_DELETED';
