@@ -40,7 +40,7 @@ export async function GET(req,{params}){
    await requireRole();
    if(p==='admin/dashboard'){
     const [counts,payments,reviews,exceptions,notifications]=await Promise.all([
-     one(`select (select count(*) from client_accounts)::int clients,(select count(*) from offers)::int offers,(select count(*) from payment_requests where status='PAID')::int paid,(select count(*) from subscriptions where status='PAST_DUE')::int past_due`),
+     one(`select (select count(*) from client_accounts)::int clients,(select count(*) from offers where status<>'ARCHIVED')::int offers,(select count(*) from payment_requests where status='PAID')::int paid,(select count(*) from subscriptions where status='PAST_DUE')::int past_due`),
      q(`select pr.id,pr.public_reference,pr.amount,pr.currency,pr.status,pr.created_at,pr.paid_at,c.legal_name,o.title from payment_requests pr join client_accounts c on c.id=pr.client_id join offers o on o.id=pr.offer_id order by pr.created_at desc limit 60`),
      q(`select s.id,c.legal_name,s.currency,s.recurring_amount,s.next_charge_at,s.status from subscriptions s join client_accounts c on c.id=s.client_id order by s.next_charge_at asc nulls last limit 25`),
      q('select * from reconciliation_exceptions where status=$1 order by created_at desc limit 30',['OPEN']),

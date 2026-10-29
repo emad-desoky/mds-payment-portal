@@ -8,7 +8,7 @@ export async function GET(request){
  const auth=request.headers.get('authorization');if(!process.env.CRON_SECRET||auth!==`Bearer ${process.env.CRON_SECRET}`)return Response.json({error:'Unauthorized'},{status:401});
  if(!recurringChargesEnabled())return Response.json({status:'paused'});
  // Only renew subscriptions originally created against the live processor; never reuse sandbox tokens.
- const rows=await q(`select s.id from subscriptions s join payment_requests initial on initial.id=s.initial_request_id where s.status='ACTIVE' and s.cycles_remaining>0 and s.next_charge_at<=now() and initial.mode='live' order by s.next_charge_at asc limit 20`);
+ const rows=await q(`select s.id from subscriptions s join payment_requests initial on initial.id=s.initial_request_id where s.status='ACTIVE' and s.cycles_remaining>0 and (s.next_charge_at at time zone 'Africa/Cairo')::date <= (now() at time zone 'Africa/Cairo')::date and initial.mode='live' order by s.next_charge_at asc limit 20`);
  let dispatched=0,failed=0;
  for(const row of rows.rows){
   try{
