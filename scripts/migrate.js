@@ -91,6 +91,9 @@ create table if not exists access_codes (
 create table if not exists auth_attempts (
  id bigserial primary key, source_hash text not null, occurred_at timestamptz not null default now()
 );
+-- Existing production installations are migrated in place without resetting old billing data.
+alter table public.offers add column if not exists first_monthly_renewal_date date;
+alter table public.subscriptions add column if not exists renewal_anchor_day smallint;
 create index if not exists idx_auth_attempts_key on auth_attempts(source_hash,occurred_at);
 create index if not exists idx_offers_client on offers(client_id,created_at desc);
 create index if not exists idx_requests_client on payment_requests(client_id,created_at desc);

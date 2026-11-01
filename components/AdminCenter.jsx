@@ -27,17 +27,19 @@ const cadenceInfo={
  SEMIANNUAL:{name:'Every 6 months',note:'Charge once every six months, covering six months of fees.'},
  ANNUAL_UPFRONT:{name:'Annual upfront',note:'Collect twelve months of professional fees in a single payment.'}
 };
-const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false});
+const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false,first_monthly_renewal_date:''});
+const minMonthlyRenewalDate=()=>{const today=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const part=t=>today.find(x=>x.type===t).value;const d=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+25);return d.toISOString().slice(0,10)};
 function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
  const recurring=s.transaction_family==='RECURRING';
- const ready=!recurring||(s.allowed_terms.length>0&&s.allowed_terms.every(t=>(s.cadence_matrix[t]||[]).length>0));
+ const requiresMonthlyRenewal=recurring&&s.allowed_terms.some(t=>(s.cadence_matrix[t]||[]).includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||s.auto_renew));
+ const ready=!recurring||(s.allowed_terms.length>0&&s.allowed_terms.every(t=>(s.cadence_matrix[t]||[]).length>0)&&(!requiresMonthlyRenewal||!!s.first_monthly_renewal_date));
  async function submit(e){
   e.preventDefault();
-  if(!ready){setMsg('Choose at least one term and at least one billing schedule per term.');return}
+  if(!ready){setMsg(requiresMonthlyRenewal?'Choose the first monthly renewal date.':'Choose at least one term and at least one billing schedule per term.');return}
   setBusy(true);setMsg('');
   try{
-   await api('admin/offers',s);
+   await api('admin/offers',{...s,first_monthly_renewal_date:requiresMonthlyRenewal?s.first_monthly_renewal_date:null});
    set(cleanOffer());setMsg('Approved offer created. Generate or email its private payment link below.');onSave();
   }catch(e){setMsg(e.message)}finally{setBusy(false)}
  }
@@ -62,7 +64,7 @@ function OfferForm({clients,onSave}){
    <label>Client<select required value={s.client_id} onChange={e=>set({...s,client_id:e.target.value})}><option value="">Select client</option>{(clients||[]).map(c=><option key={c.id} value={c.id}>{c.legal_name}</option>)}</select></label>
    <label>Offer title<input required value={s.title} onChange={e=>set({...s,title:e.target.value})} placeholder="Approved growth system"/></label>
    <label>Proposal / SOW reference<input required value={s.commercial_reference} onChange={e=>set({...s,commercial_reference:e.target.value})} placeholder="MDS-SOW-..."/></label>
-   <label>Payment family<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value,allowed_terms:[],cadence_matrix:{},auto_renew:false})}><option value="ONE_TIME">One-time / project payment</option><option value="RECURRING">Recurring engagement</option></select><span className="field-help">One-time collects once. Recurring lets you approve specific terms and future billing frequencies.</span></label>
+   <label>Payment family<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value,allowed_terms:[],cadence_matrix:{},auto_renew:false,first_monthly_renewal_date:''})}><option value="ONE_TIME">One-time / project payment</option><option value="RECURRING">Recurring engagement</option></select><span className="field-help">One-time collects once. Recurring lets you approve specific terms and future billing frequencies.</span></label>
    <label>Commercial currency<select value={s.currency} onChange={e=>set({...s,currency:e.target.value})}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
    <label>Approved professional fee {recurring?'(per month)':'(one-time)'}<input required type="number" min="0" step="0.01" value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/><span className="field-help">{recurring?'Enter the rate for one month; larger billing intervals multiply it automatically.':'Enter the single project charge.'}</span></label>
    <label>Implementation / setup fee<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/><span className="field-help">Added to the first payment only.</span></label>
@@ -83,7 +85,13 @@ function OfferForm({clients,onSave}){
     </div>}
    </div>)}
    {s.allowed_terms.includes('MONTHLY_FLEX')&&<label className="checkline rolling-option"><input type="checkbox" checked={s.auto_renew} onChange={e=>set({...s,auto_renew:e.target.checked})}/><span><strong>Allow rolling monthly billing for Monthly Flex</strong><small className="field-help">Optional. With client authorization, up to 12 scheduled monthly payments can be collected before review. If off, Monthly Flex is one payment for one month and requires a new agreement to continue.</small></span></label>}
-   {!ready&&<p className="field-help option-warning">At least one enabled commitment term must have a selected billing frequency.</p>}
+   {requiresMonthlyRenewal&&<div className="info-note" style={{marginTop:18}}>
+     <label htmlFor="first-monthly-renewal"><strong>First monthly renewal date</strong></label>
+     <p className="field-help">Finance chooses when the SECOND payment will be collected. The client pays the initial charge at checkout; later monthly payments fall on the same day number each month (or the last calendar day if needed). The first renewal must be at least 25 days after the initial payment.</p>
+     <input id="first-monthly-renewal" type="date" required min={minMonthlyRenewalDate()} value={s.first_monthly_renewal_date} onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})} style={{maxWidth:280,marginTop:8}}/>
+     {s.first_monthly_renewal_date&&<p className="field-help">First scheduled renewal: <strong>{s.first_monthly_renewal_date}</strong>. Further renewals use this day of the month. If the client pays too close to this date, issue a new offer with a later date.</p>}
+   </div>}
+   {!ready&&<p className="field-help option-warning">{requiresMonthlyRenewal&&!s.first_monthly_renewal_date?'Choose the first monthly renewal date.':'Each commitment needs an enabled billing frequency.'}</p>}
   </div>:<p className="info-note">A one-time payment needs no commitment term or recurring schedule. The client pays the approved project amount once; future card charges are not authorized.</p>}
   <button className="button primary" disabled={busy||!ready}>{busy?'Saving approved offer…':'Create approved offer ↗'}</button>
   {msg&&<div className="notice" role="status">{msg}</div>}
@@ -112,7 +120,7 @@ function Offers({rows,onSave,clients}){
    <div className="section-head"><div><h2>Approved offers</h2><p className="muted small">Remove an unused offer permanently, or archive a billed offer without erasing its payment records.</p></div><label className="checkline"><input type="checkbox" checked={showRemoved} onChange={e=>setShowRemoved(e.target.checked)}/>Show archived offers</label></div>
    {link&&<div className="link-result"><label>Latest secure payment link</label><div className="row-inline"><input readOnly value={link} aria-label="Secure payment link"/><button type="button" className="button secondary" onClick={()=>navigator.clipboard.writeText(link)}>Copy link</button></div></div>}
    {msg&&<div className="notice" role="status">{msg}</div>}
-   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?'Recurring · '+(o.allowed_terms||[]).map(t=>termInfo[t]?.name||t).join(' / ')+(o.allowed_terms?.includes('MONTHLY_FLEX')?(o.auto_renew?' · Rolling Monthly Flex enabled':' · Rolling Monthly Flex off'):''):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button><button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
+   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?'Recurring · '+(o.allowed_terms||[]).map(t=>termInfo[t]?.name||t).join(' / ')+(o.allowed_terms?.includes('MONTHLY_FLEX')?(o.auto_renew?' · Rolling Monthly Flex enabled':' · Rolling Monthly Flex off'):'')+(o.first_monthly_renewal_date?' · First monthly renewal: '+String(o.first_monthly_renewal_date).slice(0,10):''):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button><button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
   </div>
  </>;
 }

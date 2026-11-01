@@ -56,7 +56,7 @@ export default function PayFlow({token,offer}){
    </div>
    <div className="panel">
     <h3>2. Billing schedule</h3>
-    <p className="muted">How often will payments be due? Dates follow the selected schedule. Monthly Flex does not allow arbitrary payment dates.</p>
+    <p className="muted">How often will payments be due? The first monthly renewal date is set by MDS Finance and displayed in your payment summary; it does not have to match today's checkout date.</p>
     {term?<div className="choice-grid">{(offer.matrix[term]||[]).map(c=><button type="button" aria-pressed={cadence===c} className={'choice choice-explained '+(cadence===c?'selected':'')} key={c} onClick={()=>chooseCadence(c)}>
      <span className="choice-indicator">{cadence===c?'●':'○'}</span><span><strong>{labels[c]||c}</strong><small className="field-help">{descriptions[c]}</small></span>
     </button>)}</div>:<p className="selection-prompt">Choose a commitment term above to see its available payment schedules.</p>}
@@ -86,7 +86,8 @@ export default function PayFlow({token,offer}){
      <div className="summary-row"><span>Payment frequency</span><b>{labels[quote.cadence]}</b></div>
      <div className="summary-row"><span>Total authorized charges</span><b>{quote.cycles}</b></div>
      {hasFutureCharges&&<div className="summary-row"><span>Each later charge</span><b>{format(quote.futureCharge,quote.currency)}</b></div>}
-     {quote.nextPaymentDate&&<div className="summary-row"><span>Next due date</span><b>{quote.nextPaymentDate}</b></div>}
+     {quote.nextPaymentDate&&<div className="summary-row"><span>{quote.firstRenewalDate?'Finance-selected first renewal':'Next due date'}</span><b>{quote.nextPaymentDate}</b></div>}
+     {quote.firstRenewalDate&&<p className="muted small">The first payment is collected when you complete checkout. Future monthly charges follow the {quote.renewalAnchorDay}{quote.renewalAnchorDay===1?'st':quote.renewalAnchorDay===2?'nd':quote.renewalAnchorDay===3?'rd':'th'} day of each month, or the last calendar day if that day does not exist.</p>}
      <div className="summary-row"><span>{quote.rollingMonthly?'Authorization review date':'Term review/end'}</span><b>{quote.termEndDate}</b></div>
      <p className="muted small">{quote.rollingMonthly?'Month-to-month commitment, with up to 12 monthly payments authorized before review.':'The selected schedule sets the dates of payments. A one-payment arrangement requires a new agreement to continue.'}</p>
     </>}

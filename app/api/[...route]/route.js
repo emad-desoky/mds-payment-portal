@@ -3,6 +3,7 @@ import {NextResponse} from 'next/server';
 import {q,one,transaction} from '../../../lib/db.js';
 import {getUser,requireRole,sessionCookie,clearSessionCookie,checkOrigin,hashPassword,verifyPassword,rateLimit,randomToken,hexhash,safeString,audit} from '../../../lib/security.js';
 import {calculate,money,TERM_MONTHS,CADENCE_MONTHS} from '../../../lib/billing.js';
+import {validateFirstMonthlyRenewal} from '../../../lib/renewal-dates.js';
 import {startPayment,gatewayMode,recurringChargesEnabled,refundPayment,verifySession} from '../../../lib/kashier.js';
 import {email} from '../../../lib/email.js';
 import {receiveWebhook} from '../../../lib/webhook.js';
@@ -169,9 +170,13 @@ export async function POST(req,{params}){
     if(Object.values(matrix).some(a=>!a.length))throw Object.assign(Error('Choose at least one billing schedule for each enabled term'),{status:400});
     const mode=recurring?'RECURRING':'ONE_TIME';
     const rollingMonthly=recurring&&allowed.includes('MONTHLY_FLEX')&&b.auto_renew===true;
-    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,approval_reference,approved_by,approved_at,status)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),rollingMonthly,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
-    await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,currency:b.currency});return ok({offer:row});
+    // A monthly renewal date is required for any monthly cadence that will charge more than once.
+    const hasMonthlyRenewal=recurring&&allowed.some(t=>matrix[t].includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||rollingMonthly));
+    if(hasMonthlyRenewal&&!b.first_monthly_renewal_date)throw Object.assign(Error('Choose the first monthly renewal date for this recurring offer'),{status:400});
+    const monthlyDate=hasMonthlyRenewal?validateFirstMonthlyRenewal(b.first_monthly_renewal_date):null;
+    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,first_monthly_renewal_date,approval_reference,approved_by,approved_at,status)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),rollingMonthly,monthlyDate,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
+    await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,currency:b.currency,firstMonthlyRenewalDate:monthlyDate});return ok({offer:row});
    }
    if(p==='admin/remove-offer'){
     const id=safeString(b.offer_id,60);
