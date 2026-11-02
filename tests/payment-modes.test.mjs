@@ -56,3 +56,13 @@ test('recurring payload cannot activate without explicit consent timestamp',asyn
  assert.equal(r.body.order,payment.merchant_order_id);
  assert.equal(r.body.saveCard,undefined);
 });
+
+test('Kashier tokenized signature uses the same numeric amount as its order body',async()=>{
+ const {hashTokenizedPayment}=await import('../lib/kashier.js');
+ const crypto=await import('node:crypto');
+ const args={mid:'MID-TEST',reference:'ORDER-1',amount:1250,currency:'EGP',customerReference:'client-1',apiKey:'test-payment-key'};
+ const actual=hashTokenizedPayment(args);
+ const expected=crypto.createHmac('sha256',args.apiKey).update('/?payment=MID-TEST.ORDER-1.1250.EGP.client-1').digest('hex');
+ const wrong=crypto.createHmac('sha256',args.apiKey).update('/?payment=MID-TEST.ORDER-1.1250.00.EGP.client-1').digest('hex');
+ assert.equal(actual,expected);assert.notEqual(actual,wrong);
+});

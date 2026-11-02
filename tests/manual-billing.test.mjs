@@ -39,3 +39,11 @@ test('manual payment links allow a nearer first renewal while auto-charge requir
  assert.equal(manual.nextPaymentDate,'2026-11-12');
  assert.throws(()=>calculate(offer,'COMMIT_3M','MONTHLY',now,'AUTO'),e=>e.code==='RENEWAL_DATE_TOO_SOON');
 });
+
+test('a confirmed declined AUTO payment becomes eligible for daily manual-invoice reminders',()=>{
+ const auto={collection_method:'AUTO',status:'PAST_DUE',cycles_remaining:5,next_charge_at:'2026-12-10T08:00:00Z'};
+ assert.equal(renewalStatus(auto),'MANUAL_OVERDUE');
+ assert.equal(dueForReminder(auto,'2026-12-10'),true);
+ assert.equal(dueForReminder({...auto,status:'ACTIVE'},'2026-12-10'),false);
+ assert.equal(dueForReminder({...auto,status:'PAYMENT_REVIEW_REQUIRED'},'2026-12-10'),false);
+});

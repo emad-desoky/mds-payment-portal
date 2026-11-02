@@ -42,6 +42,11 @@ export async function GET(request){
      issued++;
     }
     if(cycle.status!=='OPEN'||dateOnly(cycle.last_reminder_date)===today)return null;
+    // Don't ask a client to pay again while a hosted checkout remains in progress.
+    const inflight=(await c.query(`select id from payment_requests
+     where calculation->>'billingCycleId'=$1 and status='PROCESSING'
+      and created_at>now()-interval '45 minutes' limit 1`,[cycle.id])).rows[0];
+    if(inflight)return null;
     await c.query('update manual_billing_cycles set last_reminder_date=$1,reminder_count=reminder_count+1 where id=$2',[today,cycle.id]);
     return {...cycle,company:s.legal_name,email:s.billing_email,locale:s.locale,title:s.title};
    });
@@ -82,6 +87,7 @@ export async function GET(request){
       where s.id=$1 and s.collection_method='AUTO' and s.status='ACTIVE' and s.cycles_remaining>0
       and s.auto_charge_consent_at is not null and initial.mode='live'
       and initial.calculation->>'collectionMethod'='AUTO'
+      and (s.next_charge_at at time zone 'Africa/Cairo')::date <= (now() at time zone 'Africa/Cairo')::date
       for update of s skip locked`,[row.id])).rows[0];
      if(!s||!s.token_encrypted||!s.agreement_id)return null;
      const reference=`RN-${crypto.randomBytes(8).toString('hex')}`;
