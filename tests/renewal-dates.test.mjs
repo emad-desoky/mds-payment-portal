@@ -19,8 +19,10 @@ test('Month-end billing remains anchored to the 31st even after February',()=>{
  assert.equal(addMonthsOnDay('2027-02-28',1,31),'2027-03-31');
  assert.equal(addMonthsOnDay('2027-01-31',1,30),'2027-02-28');
 });
-test('Configured monthly date less than 25 days ahead is rejected before checkout',()=>{
- assert.throws(()=>calculate({...offer,first_monthly_renewal_date:'2026-11-15'},'COMMIT_3M','MONTHLY',now),e=>e.code==='RENEWAL_DATE_TOO_SOON');
+test('Manual billing supports near dates while automatic charging requires 25 days',()=>{
+ const plan={...offer,allow_auto_charge:true,first_monthly_renewal_date:'2026-11-15'};
+ assert.equal(calculate(plan,'COMMIT_3M','MONTHLY',now,'MANUAL').nextPaymentDate,'2026-11-15');
+ assert.throws(()=>calculate(plan,'COMMIT_3M','MONTHLY',now,'AUTO'),e=>e.code==='RENEWAL_DATE_TOO_SOON');
  assert.equal(validateFirstMonthlyRenewal('2026-11-26',now),'2026-11-26');
 });
 test('Cairo date boundary and calendar-day arithmetic are timezone-safe',()=>{
