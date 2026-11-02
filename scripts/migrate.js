@@ -94,6 +94,26 @@ create table if not exists auth_attempts (
 -- Existing production installations are migrated in place without resetting old billing data.
 alter table public.offers add column if not exists first_monthly_renewal_date date;
 alter table public.subscriptions add column if not exists renewal_anchor_day smallint;
+alter table public.offers add column if not exists allow_auto_charge boolean not null default false;
+alter table public.subscriptions add column if not exists collection_method text not null default 'MANUAL';
+alter table public.subscriptions add column if not exists rolling_manual boolean not null default false;
+alter table public.subscriptions add column if not exists auto_charge_consent_at timestamptz;
+create table if not exists manual_billing_cycles (
+ id uuid primary key default gen_random_uuid(),
+ subscription_id uuid not null references subscriptions(id),
+ due_date date not null,
+ amount numeric(14,2) not null check(amount>0),
+ currency text not null,
+ status text not null default 'OPEN' check(status in ('OPEN','PAID','CANCELLED')),
+ link_hash text not null unique,
+ link_token_encrypted text not null,
+ last_reminder_date date,
+ reminder_count int not null default 0,
+ created_at timestamptz not null default now(),
+ paid_at timestamptz,
+ unique(subscription_id,due_date)
+);
+create index if not exists idx_manual_cycles_open on manual_billing_cycles(status,due_date);
 create index if not exists idx_auth_attempts_key on auth_attempts(source_hash,occurred_at);
 create index if not exists idx_offers_client on offers(client_id,created_at desc);
 create index if not exists idx_requests_client on payment_requests(client_id,created_at desc);
@@ -104,7 +124,7 @@ create index if not exists idx_invoices_client on invoices(client_id,issued_at d
 create index if not exists idx_audit_occurred on audit_events(occurred_at desc);
 create index if not exists idx_support_client on support_tickets(client_id,created_at desc);
 `;
-const tables=['client_accounts','portal_users','portal_settings','offers','payment_requests','subscriptions','gateway_transactions','webhook_events','invoices','refunds','notification_events','audit_events','reconciliation_exceptions','support_tickets','access_codes','auth_attempts'];
+const tables=['client_accounts','portal_users','portal_settings','offers','payment_requests','subscriptions','gateway_transactions','webhook_events','invoices','refunds','notification_events','audit_events','reconciliation_exceptions','support_tickets','access_codes','auth_attempts','manual_billing_cycles'];
 const decisions=[
  ['seller_legal_name','Medical Digital Solutions','APPROVED'],['legal_registration','','NEEDS_APPROVAL'],['registered_address','','NEEDS_APPROVAL'],
  ['seller_tax_id','','NEEDS_APPROVAL'],['tax_treatment','','NEEDS_APPROVAL'],['eta_route','','NEEDS_APPROVAL'],
