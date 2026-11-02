@@ -1236,3 +1236,18 @@ button.danger-inline:disabled,.offer-actions button:disabled { opacity:.5; curso
  .table-actions.offer-actions { min-width:115px; }
  .billing-chip { white-space:normal; }
 }
+
+/* Finance-locked client checkout: only explicit auto-renew consent is interactive */
+.approved-plan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px;padding-top:18px;border-top:1px solid #e1ecf0}
+.approved-plan>div{display:flex;flex-direction:column;gap:5px;padding:12px 14px;background:#f3f9fb;border-radius:12px}
+.approved-plan small{font-size:11px;color:#688195}.approved-plan strong{font-size:14px;color:#153447}
+.auto-renew-control{display:flex;align-items:center;justify-content:space-between;gap:18px;cursor:pointer;padding:18px;border:1px solid #c4e5eb;background:#f1fafd;border-radius:16px}
+.auto-renew-control.auto-renew-active{background:#e7f9f4;border-color:#8ad3b9}
+.auto-renew-control>span{flex:1;min-width:0}.auto-renew-control strong{font-size:15px;color:#103548;display:block}
+.auto-renew-control input[role=switch]{appearance:none;flex:none;position:relative;width:54px;height:30px;background:#acbdc7;border:0;border-radius:50px;cursor:pointer;transition:background .2s ease}
+.auto-renew-control input[role=switch]:checked{background:#099db8}.auto-renew-control input[role=switch]:after{content:'';position:absolute;top:4px;left:4px;width:22px;height:22px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002;transition:transform .2s}
+.auto-renew-control input[role=switch]:checked:after{transform:translateX(24px)}.auto-renew-control input[role=switch]:disabled{cursor:not-allowed;opacity:.5}
+.auto-renew-control input[role=switch]:focus-visible{outline:3px solid #087fb2;outline-offset:3px}
+.offer-edit-form{margin:16px 0;padding:20px;border:1px solid #b3dce6;border-radius:16px;background:#fbfeff}.offer-edit-form h3{margin:0 0 8px}
+.pricing-preview{margin-top:20px}.pricing-preview>.summary-row{padding:7px 0}.pricing-preview>strong{display:block;margin-bottom:12px}
+@media(max-width:600px){.approved-plan{grid-template-columns:1fr}.auto-renew-control{padding:13px;gap:9px}.auto-renew-control input[role=switch]{width:50px}}
