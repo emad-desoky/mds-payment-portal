@@ -10,8 +10,10 @@ test('only new explicitly-authorized card agreements can trigger live renewals',
  assert.match(cron,/s\.auto_charge_consent_at is not null/);
  assert.match(cron,/initial\.calculation->>'autoChargeConsentAt' is not null/);
 });
-test('customer sees only the payment opt-in, not Finance term/schedule selectors or technical reminder copy',()=>{
+test('customer chooses among Finance-approved packages and separately opts into Auto-renew',()=>{
+ assert.match(checkout,/plan-choice-grid/);
+ assert.match(checkout,/billingMonths:selectedMonths/);
  assert.match(checkout,/role="switch"/);
  assert.doesNotMatch(checkout,/1\. Commitment term|2\. Billing schedule|No repeated automatic charge/);
- assert.match(checkout,/We'll email you when your next payment is due/);
+ assert.match(checkout,/We'll remind you when your next payment is due/);
 });
