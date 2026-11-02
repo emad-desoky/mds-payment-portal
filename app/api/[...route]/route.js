@@ -275,7 +275,8 @@ export async function POST(req,{params}){
      if(!offer||offer.transaction_family!=='RECURRING'||offer.status==='ARCHIVED')
       throw Object.assign(Error('Active recurring offer not found'),{status:404});
      const paid=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status='PAID'",[id])).rows[0].n;
-     if(paid>0)throw Object.assign(Error('This agreement already has payments. To change its billing mode, use Subscription controls or issue a new agreement.'),{status:409});
+     const processing=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status='PROCESSING' and created_at>now()-interval '45 minutes'",[id])).rows[0].n;
+     if(paid>0||processing>0)throw Object.assign(Error('The agreement has paid or active checkout records. Update its billing mode only before any payment, or issue a new approved agreement.'),{status:409});
      if(allow&&!offer.allowed_terms.some(t=>(offer.cadence_matrix?.[t]||[]).includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||offer.auto_renew)))
       throw Object.assign(Error('Auto-charge needs a monthly schedule with more than one installment'),{status:400});
      await c.query('update offers set allow_auto_charge=$1 where id=$2',[allow,id]);
