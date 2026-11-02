@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import {NextResponse} from 'next/server';
 import {q,one,transaction} from '../../../lib/db.js';
 import {getUser,requireRole,sessionCookie,clearSessionCookie,checkOrigin,hashPassword,verifyPassword,rateLimit,randomToken,hexhash,safeString,audit} from '../../../lib/security.js';
-import {calculate,money,TERM_MONTHS,CADENCE_MONTHS} from '../../../lib/billing.js';
+import {calculateApprovedOffer,money,TERM_MONTHS,CADENCE_MONTHS} from '../../../lib/billing.js';
+import {validatePlanInput} from '../../../lib/finance-plan.js';
 import {validateFirstMonthlyRenewal} from '../../../lib/renewal-dates.js';
 import {cryptoDecode} from '../../../lib/billing.js';
 import {dateOnly} from '../../../lib/renewal-dates.js';
@@ -100,7 +101,7 @@ export async function GET(req,{params}){
    if(p==='admin/reconciliation')return ok({exceptions:(await q('select * from reconciliation_exceptions order by created_at desc limit 250')).rows,webhooks:(await q('select * from webhook_events order by received_at desc limit 100')).rows});
    if(p==='admin/subscriptions')return ok({
      subscriptions:(await q(`select s.id,s.offer_id,s.term_code,s.cadence_code,s.recurring_amount,s.currency,s.cycles_remaining,
-       s.next_charge_at,s.term_end,s.auto_renew,s.last_payment_at,s.status,s.collection_method,s.rolling_manual,c.legal_name,o.title,
+       s.next_charge_at,s.term_end,s.auto_renew,s.last_payment_at,s.status,s.collection_method,s.rolling_manual,s.billing_period_months,c.legal_name,o.title,
        p.mode as initial_mode,(s.token_encrypted is not null) as card_saved,(s.agreement_id is not null) as agreement_saved,
        mb.id as pending_cycle_id,mb.due_date as pending_due_date,mb.reminder_count as pending_reminders,mb.link_token_encrypted
        from subscriptions s join client_accounts c on c.id=s.client_id join offers o on o.id=s.offer_id
@@ -166,17 +167,17 @@ export async function POST(req,{params}){
   }
   if(p==='offer/quote'){
     await rateLimit('quote',35,5);const offer=await offerFromToken(b.token);if(!offer)throw Object.assign(Error('Payment link is unavailable or expired'),{status:404});
-    const method=b.collectionMethod==='AUTO'?'AUTO':'MANUAL';
-    if(method==='AUTO'&&!recurringChargesEnabled())throw Object.assign(Error('Automatic card collection is not yet enabled by Finance. Please select manual monthly payments.'),{status:409});
-    return ok({quote:calculate(offer,b.term,b.cadence,new Date(),method)});
+    const method=b.autoRenew===true?'AUTO':'MANUAL';
+    if(method==='AUTO'&&!recurringChargesEnabled())throw Object.assign(Error('Automatic renewal is temporarily unavailable. Switch the toggle off to pay manually.'),{status:409});
+    return ok({quote:calculateApprovedOffer(offer,method)});
   }
   if(p==='offer/checkout'){
     await rateLimit('checkout',14,20);const offer=await offerFromToken(b.token);if(!offer)throw Object.assign(Error('Payment link is unavailable or expired'),{status:404});
     if(!offer.approval_reference||!offer.approved_by)throw Object.assign(Error('Payment request is not available'),{status:403});
-    const method=b.collectionMethod==='AUTO'?'AUTO':'MANUAL';
-    if(method==='AUTO'&&!recurringChargesEnabled())throw Object.assign(Error('Automatic card collection is not available. Choose manual monthly payments.'),{status:409});
-    if(method==='AUTO'&&b.autoChargeConsent!==true)throw Object.assign(Error('Please explicitly approve the automatic monthly card charges.'),{status:400});
-    const calc=calculate(offer,b.term,b.cadence,new Date(),method);
+    const method=b.autoRenew===true?'AUTO':'MANUAL';
+    if(method==='AUTO'&&!recurringChargesEnabled())throw Object.assign(Error('Automatic renewal is not currently available. Switch Auto-renew off to pay manually.'),{status:409});
+    if(method==='AUTO'&&b.autoChargeConsent!==true)throw Object.assign(Error('Explicit consent to automatic card charging is required.'),{status:400});
+    const calc=calculateApprovedOffer(offer,method);
     if(method==='AUTO')calc.autoChargeConsentAt=new Date().toISOString();
     if(!Number.isFinite(calc.firstCharge)||calc.firstCharge<=0)throw Object.assign(Error('Payment amount must be greater than zero'),{status:400});
     const prior=await one("select * from payment_requests where offer_id=$1 and status in('PROCESSING','PAID') order by created_at desc limit 1",[offer.id]);
@@ -197,7 +198,7 @@ export async function POST(req,{params}){
       }
       const ref=randomToken(12);const order=`MDS-${Date.now()}-${crypto.randomInt(100000,999999)}`;
       const created=(await c.query(`insert into payment_requests(offer_id,client_id,public_reference,merchant_order_id,idempotency_key,term_code,cadence_code,calculation,amount,currency,mode)
-         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,[offer.id,offer.client_id,ref,order,safeString(b.idempotencyKey,120)||randomToken(10),b.term,b.cadence,JSON.stringify(calc),calc.firstCharge,offer.currency,gatewayMode()])).rows[0];return created;
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,[offer.id,offer.client_id,ref,order,safeString(b.idempotencyKey,120)||randomToken(10),calc.term,calc.cadence,JSON.stringify(calc),calc.firstCharge,offer.currency,gatewayMode()])).rows[0];return created;
     });
     if(payment.existing)return ok({checkoutUrl:payment.gateway_url,reference:payment.public_reference});
     try{
@@ -267,31 +268,58 @@ export async function POST(req,{params}){
     await audit(user,'CLIENT_CREATED','client_account',row.id);return ok({client:row});
    }
    if(p==='admin/offers'){
-    const client=await one('select id from client_accounts where id=$1',[b.client_id]);if(!client)throw Object.assign(Error('Client not found'),{status:404});
-    if(!b.approval_reference||!b.approved_by||!b.commercial_reference||!b.title)throw Object.assign(Error('Approved commercial reference, approver, offer reference and title are required'),{status:400});
+    const client=await one('select id from client_accounts where id=$1',[b.client_id]);
+    if(!client)throw Object.assign(Error('Client not found'),{status:404});
+    if(!b.approval_reference||!b.approved_by||!b.commercial_reference||!b.title)
+     throw Object.assign(Error('Approved commercial reference, approver, offer reference and title are required'),{status:400});
     if(!['EGP','USD'].includes(b.currency))throw Object.assign(Error('Currency is invalid'),{status:400});
-    const vals=[b.professional_fee,b.setup_fee,b.pass_through_fee].map(Number);if(vals.some(n=>!Number.isFinite(n)||n<0))throw Object.assign(Error('Invalid fee'),{status:400});
+    const values=[b.professional_fee,b.setup_fee,b.pass_through_fee].map(Number);
+    if(values.some(x=>!Number.isFinite(x)||x<0))throw Object.assign(Error('Invalid approved fee'),{status:400});
     const recurring=b.transaction_family==='RECURRING';
-    const allowed=recurring?['MONTHLY_FLEX','COMMIT_3M','COMMIT_6M','COMMIT_12M'].filter(x=>Array.isArray(b.allowed_terms)&&b.allowed_terms.includes(x)):['MONTHLY_FLEX'];
-    if(!allowed.length)throw Object.assign(Error('Choose at least one commitment term'),{status:400});
-    const matrix=Object.fromEntries(allowed.map(t=>{
-      const chosen=Array.isArray(b.cadence_matrix?.[t])?b.cadence_matrix[t]:[];
-      const unique=[...new Set(chosen)];
-      if(unique.some(c=>!CADENCE_MONTHS[c]||CADENCE_MONTHS[c]>TERM_MONTHS[t]||TERM_MONTHS[t]%CADENCE_MONTHS[c]!==0))
-        throw Object.assign(Error('A billing schedule is incompatible with its commitment term'),{status:400});
-      return [t,unique];
-    }));
-    if(Object.values(matrix).some(a=>!a.length))throw Object.assign(Error('Choose at least one billing schedule for each enabled term'),{status:400});
-    const mode=recurring?'RECURRING':'ONE_TIME';
-    const rollingMonthly=recurring&&allowed.includes('MONTHLY_FLEX')&&b.auto_renew===true;
-    const allowAutoCharge=recurring&&allowed.some(t=>matrix[t].includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||rollingMonthly))&&b.allow_auto_charge===true;
-    // A monthly renewal date is required for any monthly cadence that will charge more than once.
-    const hasMonthlyRenewal=recurring&&allowed.some(t=>matrix[t].includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||rollingMonthly));
-    if(hasMonthlyRenewal&&!b.first_monthly_renewal_date)throw Object.assign(Error('Choose the first monthly renewal date for this recurring offer'),{status:400});
-    const monthlyDate=hasMonthlyRenewal?validateFirstMonthlyRenewal(b.first_monthly_renewal_date,new Date(),1):null;
-    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,first_monthly_renewal_date,allow_auto_charge,approval_reference,approved_by,approved_at,status)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),rollingMonthly,monthlyDate,allowAutoCharge,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
-    await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,currency:b.currency,firstMonthlyRenewalDate:monthlyDate});return ok({offer:row});
+    const approvedPlan=recurring?validatePlanInput({months:b.billing_period_months,discountType:b.plan_discount_type||'NONE',
+      discountValue:b.plan_discount_value,monthlyFee:b.professional_fee}):null;
+    const renewalDate=recurring?validateFirstMonthlyRenewal(b.first_monthly_renewal_date,new Date(),1):null;
+    const allowed=recurring?[`PACKAGE_${approvedPlan.months}M`]:['MONTHLY_FLEX'];
+    const matrix=recurring?{[allowed[0]]:[`EVERY_${approvedPlan.months}M`]}:{MONTHLY_FLEX:['MONTHLY']};
+    const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,
+      professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,
+      first_monthly_renewal_date,allow_auto_charge,billing_period_months,plan_discount_type,plan_discount_value,
+      approval_reference,approved_by,approved_at,status)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,now(),'APPROVED') returning id`,
+      [client.id,safeString(b.title,250),safeString(b.commercial_reference,150),recurring?'RECURRING':'ONE_TIME',
+       b.currency,...values,JSON.stringify(allowed),JSON.stringify(matrix),recurring,renewalDate,
+       recurring&&b.allow_auto_charge===true,approvedPlan?.months||null,approvedPlan?.discountType||'NONE',
+       approvedPlan?.discountValue||0,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
+    await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,months:approvedPlan?.months||null,
+      discount:approvedPlan?.discountType||'NONE',value:approvedPlan?.discountValue||0});
+    return ok({offer:row});
+   }
+   if(p==='admin/update-offer-plan'){
+    const id=safeString(b.offer_id,60);
+    if(!/^[0-9a-f-]{36}$/i.test(id))throw Object.assign(Error('Invalid offer'),{status:400});
+    const updated=await transaction(async(c)=>{
+      const old=(await c.query("select * from offers where id=$1 and transaction_family='RECURRING' and status<>'ARCHIVED' for update",[id])).rows[0];
+      if(!old)throw Object.assign(Error('Recurring offer not found'),{status:404});
+      const paid=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status in('PAID','PROCESSING','REVIEW_REQUIRED')",[id])).rows[0].n;
+      const linked=(await c.query('select count(*)::int n from subscriptions where offer_id=$1',[id])).rows[0].n;
+      if(paid||linked)throw Object.assign(Error('This offer has a paid or active checkout. Existing financial agreements cannot be repriced. Create a new offer instead.'),{status:409});
+      const rate=Number(b.professional_fee),setup=Number(b.setup_fee),pass=Number(b.pass_through_fee);
+      if([rate,setup,pass].some(x=>!Number.isFinite(x)||x<0))throw Object.assign(Error('Invalid approved fee'),{status:400});
+      const plan=validatePlanInput({months:b.billing_period_months,discountType:b.plan_discount_type||'NONE',
+        discountValue:b.plan_discount_value,monthlyFee:rate});
+      const renewal=validateFirstMonthlyRenewal(b.first_monthly_renewal_date,new Date(),1);
+      const allowed=[`PACKAGE_${plan.months}M`],matrix={[allowed[0]]:[`EVERY_${plan.months}M`]};
+      await c.query(`update offers set professional_fee=$1,setup_fee=$2,pass_through_fee=$3,
+       allowed_terms=$4::jsonb,cadence_matrix=$5::jsonb,billing_period_months=$6,
+       plan_discount_type=$7,plan_discount_value=$8,first_monthly_renewal_date=$9,allow_auto_charge=$10,
+       auto_renew=true,version=version+1,status='APPROVED',link_hash=null,link_expires_at=null where id=$11`,
+       [rate,setup,pass,JSON.stringify(allowed),JSON.stringify(matrix),plan.months,plan.discountType,plan.discountValue,
+       renewal,b.allow_auto_charge===true,id]);
+      await c.query("insert into audit_events(actor_id,action,entity_type,entity_id,details) values($1,'OFFER_PLAN_REAPPROVED','offer',$2,$3::jsonb)",
+       [user.id,id,JSON.stringify({months:plan.months,discountType:plan.discountType,discountValue:plan.discountValue})]);
+      return id;
+    });
+    return ok({offerId:updated,requiresNewLink:true});
    }
    if(p==='admin/toggle-auto-charge'){
     const id=safeString(b.offer_id,60);
@@ -303,8 +331,9 @@ export async function POST(req,{params}){
      const paid=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status='PAID'",[id])).rows[0].n;
      const processing=(await c.query("select count(*)::int n from payment_requests where offer_id=$1 and status='PROCESSING' and created_at>now()-interval '45 minutes'",[id])).rows[0].n;
      if(paid>0||processing>0)throw Object.assign(Error('The agreement has paid or active checkout records. Update its billing mode only before any payment, or issue a new approved agreement.'),{status:409});
-     if(allow&&!offer.allowed_terms.some(t=>(offer.cadence_matrix?.[t]||[]).includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||offer.auto_renew)))
-      throw Object.assign(Error('Auto-charge needs a monthly schedule with more than one installment'),{status:400});
+     if(allow&&!offer.billing_period_months
+      &&!offer.allowed_terms.some(t=>(offer.cadence_matrix?.[t]||[]).includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||offer.auto_renew)))
+      throw Object.assign(Error('Finance must approve a recurring billing period before enabling Auto-renew'),{status:400});
      await c.query('update offers set allow_auto_charge=$1 where id=$2',[allow,id]);
      return offer;
     });
@@ -320,7 +349,7 @@ export async function POST(req,{params}){
      if(sub.status==='PENDING_RENEWAL_PAYMENT'||sub.status==='PAYMENT_REVIEW_REQUIRED')
       throw Object.assign(Error('A charge needs reconciliation before the payment method can change.'),{status:409});
      if(!['ACTIVE','PAST_DUE'].includes(sub.status))throw Object.assign(Error('Subscription is not active.'),{status:409});
-     await c.query("update subscriptions set collection_method='MANUAL',rolling_manual=(term_code='MONTHLY_FLEX' and auto_renew=true),token_encrypted=null,agreement_id=null,auto_charge_consent_at=null where id=$1",[id]);
+     await c.query("update subscriptions set collection_method='MANUAL',rolling_manual=(term_code like 'PACKAGE_%' or (term_code='MONTHLY_FLEX' and auto_renew=true)),token_encrypted=null,agreement_id=null,auto_charge_consent_at=null where id=$1",[id]);
      return true;
     });
     if(changed)await audit(user,'AUTO_CHARGE_DISABLED','subscription',id);
