@@ -336,6 +336,9 @@ export async function POST(req,{params}){
        auto_renew=true,version=version+1,status='APPROVED',link_hash=null,link_expires_at=null where id=$11`,
        [rate,setup,pass,JSON.stringify(allowed),JSON.stringify(matrix),selected.months,selected.discountType,selected.discountValue,
        renewal,b.allow_auto_charge===true,id]);
+      if(old.allow_auto_charge===true&&b.allow_auto_charge!==true)
+       await c.query("insert into audit_events(actor_id,action,entity_type,entity_id,details) values($1,'OFFER_AUTO_CHARGE_DISABLED','offer',$2,$3::jsonb)",
+        [user.id,id,JSON.stringify({reason:'Explicitly disabled while approving package terms'})]);
       await c.query("insert into audit_events(actor_id,action,entity_type,entity_id,details) values($1,'OFFER_PLAN_REAPPROVED','offer',$2,$3::jsonb)",
        [user.id,id,JSON.stringify({packages})]);
       return id;

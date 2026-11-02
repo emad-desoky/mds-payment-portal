@@ -133,7 +133,7 @@ update public.offers o set allow_auto_charge=true
   and not exists(select 1 from public.payment_requests p where p.offer_id=o.id
     and p.status in ('PAID','PROCESSING','REVIEW_REQUIRED'))
   and not exists(select 1 from public.audit_events a where a.entity_type='offer'
-    and a.entity_id=o.id::text and a.action in ('OFFER_AUTO_CHARGE_DISABLED','OFFER_PLAN_REAPPROVED'));
+    and a.entity_id=o.id::text and a.action='OFFER_AUTO_CHARGE_DISABLED');
 create index if not exists idx_auth_attempts_key on auth_attempts(source_hash,occurred_at);
 create index if not exists idx_offers_client on offers(client_id,created_at desc);
 create index if not exists idx_requests_client on payment_requests(client_id,created_at desc);
