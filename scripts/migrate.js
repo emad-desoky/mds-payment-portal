@@ -124,6 +124,16 @@ update public.subscriptions s set collection_method='MANUAL',status='ACTIVE',
  rolling_manual=(s.term_code='MONTHLY_FLEX' and s.auto_renew=true)
  from public.payment_requests p where s.initial_request_id=p.id
  and p.status='PAID' and s.status='PAYMENT_METHOD_REQUIRED' and s.next_charge_at is not null;
+-- Enable client opt-in on unpaid MDS internal QA offers without affecting live customers.
+update public.offers o set allow_auto_charge=true
+ from public.client_accounts ca
+ where o.client_id=ca.id and ca.legal_name='Medical Digital Solutions - Internal QA'
+  and o.transaction_family='RECURRING' and o.billing_period_months is not null
+  and o.status in ('APPROVED','SENT') and o.allow_auto_charge=false
+  and not exists(select 1 from public.payment_requests p where p.offer_id=o.id
+    and p.status in ('PAID','PROCESSING','REVIEW_REQUIRED'))
+  and not exists(select 1 from public.audit_events a where a.entity_type='offer'
+    and a.entity_id=o.id::text and a.action in ('OFFER_AUTO_CHARGE_DISABLED','OFFER_PLAN_REAPPROVED'));
 create index if not exists idx_auth_attempts_key on auth_attempts(source_hash,occurred_at);
 create index if not exists idx_offers_client on offers(client_id,created_at desc);
 create index if not exists idx_requests_client on payment_requests(client_id,created_at desc);
