@@ -14,123 +14,161 @@ function ClientForm({onSave}){const [s,set]=useState({legal_name:'',billing_emai
 
 const termInfo={MONTHLY_FLEX:{name:'Monthly (legacy)'},COMMIT_3M:{name:'3-month (legacy)'},COMMIT_6M:{name:'6-month (legacy)'},COMMIT_12M:{name:'12-month (legacy)'}};
 const cadenceInfo={MONTHLY:{name:'Monthly'},QUARTERLY:{name:'Quarterly'},SEMIANNUAL:{name:'Every 6 months'},ANNUAL_UPFRONT:{name:'Yearly upfront'}};
+const money2=n=>Math.round(Number(n||0)*100)/100;
+const defaultPackages=()=>[{months:1,discountType:'NONE',discountValue:0},{months:3,discountType:'NONE',discountValue:0}];
 const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',
  professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',
- billing_period_months:1,plan_discount_type:'NONE',plan_discount_value:0,allow_auto_charge:true,first_monthly_renewal_date:''});
-const money2=n=>Math.round((Number(n)||0)*100)/100;
-const tomorrowCairo=()=>{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const v=t=>parts.find(x=>x.type===t).value;
- const d=new Date(`${v('year')}-${v('month')}-${v('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
-function PlanPricing({s}){
- const months=Number(s.billing_period_months)||1,monthly=Number(s.professional_fee)||0,gross=money2(months*monthly);
- const discType=s.plan_discount_type||'NONE',d=Number(s.plan_discount_value)||0;
- const discount=discType==='PERCENT'?money2(gross*d/100):discType==='FIXED'?d:0;
- const due=money2(Math.max(0,gross-discount));
- return <div className="info-note pricing-preview" role="status">
-  <strong>Finance-approved price preview</strong>
-  <div className="summary-row"><span>Professional fee × {months} month{months===1?'':'s'}</span><b>{format(gross,s.currency)}</b></div>
-  {discount>0&&<div className="summary-row"><span>Package discount {discType==='PERCENT'?('('+d+'%)'):''}</span><b>− {format(discount,s.currency)}</b></div>}
-  <div className="summary-row"><span><strong>Every {months} month{months===1?'':'s'} (renewal)</strong></span><b>{format(due,s.currency)}</b></div>
-  <div className="summary-row"><span>First checkout (with setup & external costs)</span><b>{format(due+Number(s.setup_fee||0)+Number(s.pass_through_fee||0),s.currency)}</b></div>
-  <small className="field-help">Discount applies to the professional service package each billing period; setup and third-party costs apply to the first payment only. Taxes follow the approved tax policy.</small>
- </div>;
+ packages:defaultPackages(),allow_auto_charge:true,first_monthly_renewal_date:''});
+const tomorrowCairo=()=>{const p=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+ const v=t=>p.find(x=>x.type===t)?.value;const d=new Date(v('year')+'-'+v('month')+'-'+v('day')+'T00:00:00Z');
+ d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
+function preparedPackages(offer){
+ const saved=offer.cadence_matrix?.__packages;
+ if(Array.isArray(saved)&&saved.length)return saved.map(p=>({months:Number(p.months),discountType:p.discountType||'NONE',discountValue:Number(p.discountValue||0)}));
+ const m=Number(offer.billing_period_months)||1;
+ const legacy={months:m,discountType:offer.plan_discount_type||'NONE',discountValue:Number(offer.plan_discount_value||0)};
+ return m===1?[legacy]:[{months:1,discountType:'NONE',discountValue:0},legacy];
 }
-function FinancePlanFields({s,set,prefix='new'}){
- const selected=[1,3,6,12].includes(Number(s.billing_period_months))?String(s.billing_period_months):'custom';
- const months=Number(s.billing_period_months);
- const valid=months>=1&&months<=36&&Number.isInteger(months);
+function packageAmounts(s,packageItem){
+ const monthly=Number(s.professional_fee)||0,months=Number(packageItem.months),gross=money2(monthly*months);
+ const type=packageItem.discountType||'NONE',value=Number(packageItem.discountValue)||0;
+ const saved=type==='PERCENT'?money2(gross*value/100):type==='FIXED'?value:0;
+ return {gross,saved,price:money2(gross-saved)};
+}
+function validFinancePackages(s){
+ const packages=s.packages||[],months=new Set();
+ if(!packages.length||packages.length>16||Number(s.professional_fee)<=0)return false;
+ return packages.every(p=>{
+  const m=Number(p.months),d=Number(p.discountValue||0),numbers=packageAmounts(s,p);
+  if(!Number.isInteger(m)||m<1||m>36||months.has(m)||!Number.isFinite(d)||d<0||numbers.price<=0)return false;
+  months.add(m);return p.discountType==='PERCENT'?d<100:true;
+ });
+}
+function FinancePlanFields({s,set}){
+ const [customMonth,setCustomMonth]=useState(2);
+ const packages=[...(s.packages||[])].sort((a,b)=>a.months-b.months);
+ const savePackages=next=>set({...s,packages:[...next].sort((a,b)=>a.months-b.months)});
+ function toggle(m){savePackages(packages.some(p=>p.months===m)?packages.filter(p=>p.months!==m):
+  [...packages,{months:m,discountType:'NONE',discountValue:0}])}
+ function patch(m,data){savePackages(packages.map(p=>p.months===m?{...p,...data}:p))}
+ const present=new Set(packages.map(p=>Number(p.months)));
+ const fixed=[1,3,6,12];
  return <div className="term-config">
-  <h3>Finance-approved service package</h3>
-  <p className="muted">Finance decides the exact package, renewal interval, discount and first renewal date. The client cannot edit any of these.</p>
-  <div className="create-grid">
-   <label>Billing period / prepaid duration
-    <select value={selected} onChange={e=>set({...s,billing_period_months:e.target.value==='custom'?2:Number(e.target.value)})}>
-     <option value="1">Monthly · 1 month</option><option value="3">3 months</option>
-     <option value="6">6 months</option><option value="12">12 months</option><option value="custom">Custom months</option>
-    </select><span className="field-help">One invoice covers this number of months. Renewals repeat on the same interval.</span>
+  <h3>Payment packages the client may choose</h3>
+  <p className="muted">MDS Finance sets the monthly fee, which prepaid packages to offer, and each discount. The client chooses between these approved packages at checkout.</p>
+  {fixed.map(m=><div className="plan-option" key={m}>
+   <label className="checkline option-heading"><input type="checkbox" checked={present.has(m)} onChange={()=>toggle(m)}/>
+    <span><strong>{m===1?'Monthly payment':m+' months prepaid'}</strong><small className="field-help">{m===1?'Standard monthly service rate':'Optional prepaid package — add your approved savings below.'}</small></span>
    </label>
-   {selected==='custom'&&<label>Custom months (1–36)
-    <input type="number" min="1" max="36" step="1" required value={s.billing_period_months}
-      onChange={e=>set({...s,billing_period_months:e.target.value})}/></label>}
-   <label>Package discount
-    <select value={s.plan_discount_type} onChange={e=>set({...s,plan_discount_type:e.target.value,plan_discount_value:0})}>
-     <option value="NONE">No discount</option><option value="PERCENT">Percent off package</option><option value="FIXED">Fixed amount off package</option>
-    </select>
+   {present.has(m)&&<PackageDiscountControls s={s} item={packages.find(p=>p.months===m)} patch={data=>patch(m,data)}/>}
+  </div>)}
+  {packages.filter(p=>!fixed.includes(p.months)).map(p=><div className="plan-option" key={p.months}>
+   <div className="row" style={{alignItems:'center',justifyContent:'space-between'}}>
+    <strong>{p.months} months · custom package</strong><button type="button" className="danger-inline" onClick={()=>toggle(p.months)}>Remove</button>
+   </div>
+   <PackageDiscountControls s={s} item={p} patch={data=>patch(p.months,data)}/>
+  </div>)}
+  <div className="row-inline" style={{gap:10,marginTop:14,flexWrap:'wrap'}}>
+   <label>Custom duration (months)
+    <input type="number" min="1" max="36" step="1" value={customMonth} onChange={e=>setCustomMonth(e.target.value)} style={{maxWidth:145}}/>
    </label>
-   {s.plan_discount_type!=='NONE'&&<label>{s.plan_discount_type==='PERCENT'?'Discount (%)':'Discount ('+s.currency+')'}
-    <input type="number" min="0" max={s.plan_discount_type==='PERCENT'?100:undefined} step="0.01" required
-      value={s.plan_discount_value} onChange={e=>set({...s,plan_discount_value:e.target.value})}/>
-    <span className="field-help">Applied to the prepaid professional fee for every {months||'?'}-month period.</span></label>}
-   <label>Next scheduled renewal date
+   <button type="button" className="button secondary" disabled={!Number.isInteger(Number(customMonth))||Number(customMonth)<1||Number(customMonth)>36||present.has(Number(customMonth))}
+    onClick={()=>toggle(Number(customMonth))}>Add custom package +</button>
+  </div>
+  <div className="create-grid" style={{marginTop:22}}>
+   <label>Preferred renewal date / day
     <input type="date" required min={tomorrowCairo()} value={s.first_monthly_renewal_date}
-      onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})}/>
-    <span className="field-help">The client pays the first package at checkout. Renewals then follow this date every {months||'?'} months. Auto-charge requires at least {months*25||25} days between payments; if the date is closer, manual links remain available.</span>
+     onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})}/>
+    <span className="field-help">Sets the preferred billing day. The first renewal is automatically scheduled AFTER the full package selected by the client (1, 3, 6 or more months). This avoids charging again before prepaid coverage ends.</span>
    </label>
   </div>
   <label className="checkline rolling-option"><input type="checkbox" checked={!!s.allow_auto_charge}
     onChange={e=>set({...s,allow_auto_charge:e.target.checked})}/>
-   <span><strong>Offer Auto-renew toggle to client</strong>
-   <small className="field-help">Recommended ON. The client must actively opt in before Kashier can save a card or authorize future payments. If OFF, the client pays via secure links and receives due reminders. Global live auto-charge authorization is separate.</small></span>
+   <span><strong>Allow automatic renewal (recommended)</strong>
+    <small className="field-help">Clients may opt in to automatic billing on their selected package's renewal dates. They can also keep it off and pay renewal reminders manually.</small>
+   </span>
   </label>
-  {!valid&&<p className="field-help option-warning">Choose a whole-number duration between 1 and 36 months.</p>}
-  <PlanPricing s={s}/>
+  {!validFinancePackages(s)&&<p className="field-help option-warning">Approve at least one valid, positively priced package. Each duration must be unique.</p>}
+  <div className="info-note pricing-preview">
+   <strong>Approved choices — {s.currency}</strong>
+   {packages.map(p=>{const a=packageAmounts(s,p);return <div className="summary-row" key={p.months}>
+    <span>{p.months===1?'Monthly':p.months+' months'}{a.saved>0?' · saving '+format(a.saved,s.currency):''}</span>
+    <b>{format(a.price,s.currency)}</b>
+   </div>})}
+   <small className="field-help">These prices exclude the initial setup/third-party charges, which apply only on the first payment. Taxes are applied when approved.</small>
+  </div>
+ </div>;
+}
+function PackageDiscountControls({s,item,patch}){
+ const a=packageAmounts(s,item);
+ return <div className="create-grid" style={{marginTop:10}}>
+  <label>Discount type
+   <select value={item.discountType||'NONE'} onChange={e=>patch({discountType:e.target.value,discountValue:0})}>
+    <option value="NONE">No discount</option>
+    <option value="PERCENT">Percentage off (%)</option>
+    <option value="FIXED">Fixed amount off ({s.currency})</option>
+   </select>
+  </label>
+  {item.discountType!=='NONE'&&<label>{item.discountType==='PERCENT'?'Discount percentage':'Discount amount ('+s.currency+')'}
+    <input type="number" min="0" max={item.discountType==='PERCENT'?99.99:undefined} step="0.01"
+     value={item.discountValue} onChange={e=>patch({discountValue:e.target.value})}/>
+   </label>}
+  <div className="info-note"><strong>{format(a.price,s.currency)}</strong>
+   {a.saved>0&&<span className="field-help">Save {format(a.saved,s.currency)} on this package (regular price {format(a.gross,s.currency)}).</span>}
+  </div>
  </div>;
 }
 function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
  const recurring=s.transaction_family==='RECURRING';
- const months=Number(s.billing_period_months),gross=money2(months*Number(s.professional_fee||0));
- const validDiscount=s.plan_discount_type!=='PERCENT'||Number(s.plan_discount_value)<100;
- const fixedOkay=s.plan_discount_type!=='FIXED'||Number(s.plan_discount_value)<gross;
- const ready=!recurring||(Number.isInteger(months)&&months>=1&&months<=36&&!!s.first_monthly_renewal_date&&validDiscount&&fixedOkay&&gross>0);
+ const ready=!recurring||(validFinancePackages(s)&&!!s.first_monthly_renewal_date);
  async function submit(e){
-  e.preventDefault();if(!ready){setMsg('Complete the approved billing months, renewal date and discount amount.');return}
+  e.preventDefault();if(!ready){setMsg('Please approve at least one package, discounts and preferred renewal date.');return}
   setBusy(true);setMsg('');
-  try{
-   await api('admin/offers',s);set(cleanOffer());setMsg('Approved package created. Generate its private payment link below.');onSave();
-  }catch(e){setMsg(e.message)}finally{setBusy(false)}
+  try{await api('admin/offers',s);set(cleanOffer());setMsg('Approved offer created. Generate or email the private link below.');onSave()}
+  catch(e){setMsg(e.message)}finally{setBusy(false)}
  }
  return <form onSubmit={submit} className="offer-form">
   <div className="create-grid">
    <label>Client<select required value={s.client_id} onChange={e=>set({...s,client_id:e.target.value})}><option value="">Select client</option>{(clients||[]).map(c=><option key={c.id} value={c.id}>{c.legal_name}</option>)}</select></label>
    <label>Offer title<input required value={s.title} onChange={e=>set({...s,title:e.target.value})} placeholder="Monthly digital marketing service"/></label>
-   <label>Proposal / SOW reference<input required value={s.commercial_reference} onChange={e=>set({...s,commercial_reference:e.target.value})} placeholder="MDS-SOW-..."/></label>
-   <label>Payment type<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value})}><option value="ONE_TIME">One-time project payment</option><option value="RECURRING">Renewable service package</option></select></label>
+   <label>Proposal / SOW reference<input required value={s.commercial_reference} onChange={e=>set({...s,commercial_reference:e.target.value})}/></label>
+   <label>Payment type<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value})}>
+    <option value="ONE_TIME">One-time project payment</option><option value="RECURRING">Recurring service with package choices</option></select></label>
    <label>Currency<select value={s.currency} onChange={e=>set({...s,currency:e.target.value})}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
    <label>Professional fee {recurring?'per month':'one-time'}<input required type="number" min="0" step="0.01" value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/></label>
    <label>Implementation / setup (first payment only)<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/></label>
    <label>Third-party costs (first payment only)<input type="number" min="0" step="0.01" value={s.pass_through_fee} onChange={e=>set({...s,pass_through_fee:e.target.value})}/></label>
-   <label>Approval evidence / document<input required value={s.approval_reference} onChange={e=>set({...s,approval_reference:e.target.value})} placeholder="Approved proposal ID"/></label>
-   <label>Approved by<input required value={s.approved_by} onChange={e=>set({...s,approved_by:e.target.value})} placeholder="Full name / role"/></label>
+   <label>Approval reference<input required value={s.approval_reference} onChange={e=>set({...s,approval_reference:e.target.value})}/></label>
+   <label>Approved by<input required value={s.approved_by} onChange={e=>set({...s,approved_by:e.target.value})}/></label>
   </div>
-  {recurring?<FinancePlanFields s={s} set={set}/>:<p className="info-note">One-time payment: the client pays the project amount once. No service renewal is created.</p>}
+  {recurring?<FinancePlanFields s={s} set={set}/>:<p className="info-note">One-time payment — no renewal subscription is created.</p>}
   <button type="submit" className="button primary" disabled={busy||!ready}>{busy?'Saving…':'Create approved offer ↗'}</button>
   {msg&&<p className="notice" role="status">{msg}</p>}
  </form>;
 }
 function EditPlan({offer,onClose,onSave}){
- const [s,set]=useState({billing_period_months:offer.billing_period_months||({'MONTHLY_FLEX':1,'COMMIT_3M':3,'COMMIT_6M':6,'COMMIT_12M':12}[offer.allowed_terms?.[0]]||1),
-  plan_discount_type:offer.plan_discount_type||'NONE',plan_discount_value:offer.plan_discount_value||0,
-  professional_fee:Number(offer.professional_fee),setup_fee:Number(offer.setup_fee),pass_through_fee:Number(offer.pass_through_fee),
-  currency:offer.currency,first_monthly_renewal_date:String(offer.first_monthly_renewal_date||'').slice(0,10),
+ const [s,set]=useState({packages:preparedPackages(offer),professional_fee:Number(offer.professional_fee),
+  setup_fee:Number(offer.setup_fee),pass_through_fee:Number(offer.pass_through_fee),currency:offer.currency,
+  first_monthly_renewal_date:String(offer.first_monthly_renewal_date||'').slice(0,10),
   allow_auto_charge:!!offer.allow_auto_charge});
  const [busy,setBusy]=useState(false),[msg,setMsg]=useState('');
  async function save(e){e.preventDefault();setBusy(true);setMsg('');
-  try{
-   await api('admin/update-offer-plan',{offer_id:offer.id,...s});
-   setMsg('Package reapproved. Old unpaid link has been invalidated. Generate and send a new secure link.');
-   onSave();
-  }catch(e){setMsg(e.message)}finally{setBusy(false)}
+  try{await api('admin/update-offer-plan',{offer_id:offer.id,...s});
+   setMsg('New packages approved. Generate a fresh payment link below.');onSave()}
+  catch(e){setMsg(e.message)}finally{setBusy(false)}
  }
  return <form className="offer-edit-form" onSubmit={save}>
-  <h3>Reconfigure unpaid offer: {offer.title}</h3>
-  <p className="muted small">This edit is allowed only before payment. Existing links are invalidated to prevent charging outdated prices; generate a fresh link afterward.</p>
+  <h3>Edit payment options: {offer.title}</h3>
+  <p className="muted small">For offers without completed payment. Changes invalidate the old payment link so the client always sees the latest approved pricing.</p>
   <div className="create-grid">
    <label>Monthly fee<input type="number" min="0" step="0.01" required value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/></label>
    <label>Setup fee<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/></label>
    <label>Third-party costs<input type="number" min="0" step="0.01" value={s.pass_through_fee} onChange={e=>set({...s,pass_through_fee:e.target.value})}/></label>
   </div>
-  <FinancePlanFields s={s} set={set} prefix="edit"/>
-  <div className="row-inline"><button className="button primary" type="submit" disabled={busy}>{busy?'Saving…':'Save approved package'}</button><button className="button secondary" type="button" onClick={onClose}>Close</button></div>
+  <FinancePlanFields s={s} set={set}/>
+  <div className="row-inline"><button className="button primary" type="submit" disabled={busy||!validFinancePackages(s)||!s.first_monthly_renewal_date}>{busy?'Saving…':'Save approved packages'}</button>
+   <button className="button secondary" type="button" onClick={onClose}>Close</button></div>
   {msg&&<p className="notice" role="status">{msg}</p>}
  </form>;
 }
@@ -167,7 +205,7 @@ function Offers({rows,onSave,clients}){
    {link&&<div className="link-result"><label>Latest secure payment link</label><div className="row-inline"><input readOnly value={link} aria-label="Secure payment link"/><button type="button" className="button secondary" onClick={()=>navigator.clipboard.writeText(link)}>Copy link</button></div></div>}
    {msg&&<div className="notice" role="status">{msg}</div>}
    {editing&&<EditPlan key={editing.id} offer={editing} onClose={()=>setEditing(null)} onSave={()=>{onSave();setEditing(null)}}/>}
-   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?(o.billing_period_months?o.billing_period_months+'-month Finance package':'Legacy recurring offer · edit to lock terms')+(o.plan_discount_type==='PERCENT'?' · '+o.plan_discount_value+'% off':o.plan_discount_type==='FIXED'?' · '+format(o.plan_discount_value,o.currency)+' off':'')+(o.first_monthly_renewal_date?' · Renews '+String(o.first_monthly_renewal_date).slice(0,10):'')+(o.allow_auto_charge?' · Auto-renew available':' · Manual links only'):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button>{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} onClick={()=>setEditing(o)}>Edit plan</button>}{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} title="Only unpaid offers can change automatic collection availability" onClick={()=>toggleAuto(o)}>{o.allow_auto_charge?'Disable Auto-renew':'Enable Auto-renew'}</button>}
+   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?(o.cadence_matrix?.__packages?.length?o.cadence_matrix.__packages.length+' approved package options':o.billing_period_months?'Monthly or '+o.billing_period_months+'-month plan':'Legacy recurring offer')+''+(o.first_monthly_renewal_date?' · Renews '+String(o.first_monthly_renewal_date).slice(0,10):'')+(o.allow_auto_charge?' · Auto-renew available':' · Manual links only'):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button>{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} onClick={()=>setEditing(o)}>Edit plan</button>}{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} title="Only unpaid offers can change automatic collection availability" onClick={()=>toggleAuto(o)}>{o.allow_auto_charge?'Disable Auto-renew':'Enable Auto-renew'}</button>}
    <button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
   </div>
  </>;
