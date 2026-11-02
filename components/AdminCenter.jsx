@@ -79,8 +79,8 @@ function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
  const recurring=s.transaction_family==='RECURRING';
  const months=Number(s.billing_period_months),gross=money2(months*Number(s.professional_fee||0));
- const validDiscount=s.plan_discount_type!=='PERCENT'||Number(s.plan_discount_value)<=100;
- const fixedOkay=s.plan_discount_type!=='FIXED'||Number(s.plan_discount_value)<=gross;
+ const validDiscount=s.plan_discount_type!=='PERCENT'||Number(s.plan_discount_value)<100;
+ const fixedOkay=s.plan_discount_type!=='FIXED'||Number(s.plan_discount_value)<gross;
  const ready=!recurring||(Number.isInteger(months)&&months>=1&&months<=36&&!!s.first_monthly_renewal_date&&validDiscount&&fixedOkay&&gross>0);
  async function submit(e){
   e.preventDefault();if(!ready){setMsg('Complete the approved billing months, renewal date and discount amount.');return}

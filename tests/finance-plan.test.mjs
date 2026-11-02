@@ -26,8 +26,8 @@ test('Finance must approve and client must opt in for AUTO',()=>{
  assert.throws(()=>financePlanQuote({...base,allow_auto_charge:false},'AUTO',now),/not approved/);
 });
 test('Discount cannot exceed base and requires a real price',()=>{
- assert.throws(()=>validatePlanInput({months:3,discountType:'PERCENT',discountValue:101,monthlyFee:100}),/100%/);
- assert.throws(()=>validatePlanInput({months:2,discountType:'FIXED',discountValue:5000,monthlyFee:100}),/cannot exceed/);
+ assert.throws(()=>validatePlanInput({months:3,discountType:'PERCENT',discountValue:101,monthlyFee:100}),/positive service payment/);
+ assert.throws(()=>validatePlanInput({months:2,discountType:'FIXED',discountValue:5000,monthlyFee:100}),/positive service payment/);
  assert.throws(()=>validatePlanInput({months:0,discountType:'NONE',discountValue:0,monthlyFee:100}),/whole number/);
 });
 test('Legacy with more than one term is blocked from client selection',()=>{
