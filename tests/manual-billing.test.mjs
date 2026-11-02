@@ -32,3 +32,10 @@ test('billing dates preserve the intended day even across short months',()=>{
  assert.equal(nextDueDate('2027-02-28',1,31),'2027-03-31');
  assert.equal(reminderEventKey('some-id','2026-12-10'),'manual-renewal:some-id:2026-12-10');
 });
+
+test('manual payment links allow a nearer first renewal while auto-charge requires 25 days',()=>{
+ const offer={...base,first_monthly_renewal_date:'2026-11-12'};
+ const manual=calculate(offer,'COMMIT_3M','MONTHLY',now,'MANUAL');
+ assert.equal(manual.nextPaymentDate,'2026-11-12');
+ assert.throws(()=>calculate(offer,'COMMIT_3M','MONTHLY',now,'AUTO'),e=>e.code==='RENEWAL_DATE_TOO_SOON');
+});

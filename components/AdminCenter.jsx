@@ -28,7 +28,7 @@ const cadenceInfo={
  ANNUAL_UPFRONT:{name:'Annual upfront',note:'Collect twelve months of professional fees in a single payment.'}
 };
 const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false,allow_auto_charge:false,first_monthly_renewal_date:''});
-const minMonthlyRenewalDate=()=>{const today=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const part=t=>today.find(x=>x.type===t).value;const d=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+25);return d.toISOString().slice(0,10)};
+const minMonthlyRenewalDate=()=>{const today=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const part=t=>today.find(x=>x.type===t).value;const d=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
 function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
  const recurring=s.transaction_family==='RECURRING';
@@ -49,7 +49,7 @@ function OfferForm({clients,onSave}){
    const next=enabled?previous.allowed_terms.filter(x=>x!==t):[...previous.allowed_terms,t];
    const matrix={...previous.cadence_matrix};
    if(enabled)delete matrix[t];else matrix[t]=[];
-   return {...previous,allowed_terms:next,cadence_matrix:matrix,auto_renew:t==='MONTHLY_FLEX'&&enabled?false:previous.auto_renew};
+   return {...previous,allowed_terms:next,cadence_matrix:matrix,auto_renew:t==='MONTHLY_FLEX'?!enabled:previous.auto_renew};
   });
  }
  function setCadence(t,c){
@@ -84,10 +84,10 @@ function OfferForm({clients,onSave}){
      </div>
     </div>}
    </div>)}
-   {s.allowed_terms.includes('MONTHLY_FLEX')&&<label className="checkline rolling-option"><input type="checkbox" checked={s.auto_renew} onChange={e=>set({...s,auto_renew:e.target.checked})}/><span><strong>Allow rolling monthly billing for Monthly Flex</strong><small className="field-help">Optional. With client authorization, up to 12 scheduled monthly payments can be collected before review. If off, Monthly Flex is one payment for one month and requires a new agreement to continue.</small></span></label>}
+   {s.allowed_terms.includes('MONTHLY_FLEX')&&<label className="checkline rolling-option"><input type="checkbox" checked={s.auto_renew} onChange={e=>set({...s,auto_renew:e.target.checked})}/><span><strong>Continue monthly billing until Finance stops this service</strong><small className="field-help">Recommended for ongoing monthly services. Manual invoice links and reminders continue until this subscription is stopped. Automatic card collection, if separately enabled and accepted by the client, is limited to 12 approved charges before review. Turn off to make Monthly Flex a single payment.</small></span></label>}
    {requiresMonthlyRenewal&&<div className="info-note" style={{marginTop:18}}>
      <label htmlFor="first-monthly-renewal"><strong>First monthly renewal date</strong></label>
-     <p className="field-help">Finance chooses when the SECOND payment will be collected. The client pays the initial charge at checkout; later monthly payments fall on the same day number each month (or the last calendar day if needed). The first renewal must be at least 25 days after the initial payment.</p>
+     <p className="field-help">Finance chooses when the SECOND payment will be collected. The client pays the initial charge at checkout; later monthly payments fall on the same day number each month (or the last calendar day if needed). Manual renewals can be any future date. Automatic card billing requires a first renewal at least 25 days after checkout.</p>
      <input id="first-monthly-renewal" type="date" required min={minMonthlyRenewalDate()} value={s.first_monthly_renewal_date} onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})} style={{maxWidth:280,marginTop:8}}/>
      {s.first_monthly_renewal_date&&<p className="field-help">First scheduled renewal: <strong>{s.first_monthly_renewal_date}</strong>. Further renewals use this day of the month. If the client pays too close to this date, issue a new offer with a later date.</p>}
    </div>}

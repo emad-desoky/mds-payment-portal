@@ -288,7 +288,7 @@ export async function POST(req,{params}){
     // A monthly renewal date is required for any monthly cadence that will charge more than once.
     const hasMonthlyRenewal=recurring&&allowed.some(t=>matrix[t].includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||rollingMonthly));
     if(hasMonthlyRenewal&&!b.first_monthly_renewal_date)throw Object.assign(Error('Choose the first monthly renewal date for this recurring offer'),{status:400});
-    const monthlyDate=hasMonthlyRenewal?validateFirstMonthlyRenewal(b.first_monthly_renewal_date):null;
+    const monthlyDate=hasMonthlyRenewal?validateFirstMonthlyRenewal(b.first_monthly_renewal_date,new Date(),1):null;
     const row=(await q(`insert into offers(client_id,title,commercial_reference,transaction_family,currency,professional_fee,setup_fee,pass_through_fee,allowed_terms,cadence_matrix,auto_renew,first_monthly_renewal_date,allow_auto_charge,approval_reference,approved_by,approved_at,status)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,now(),'APPROVED') returning id`,[client.id,safeString(b.title,250),safeString(b.commercial_reference,150),mode,b.currency,...vals,JSON.stringify(allowed),JSON.stringify(matrix),rollingMonthly,monthlyDate,allowAutoCharge,safeString(b.approval_reference,250),safeString(b.approved_by,150)])).rows[0];
     await audit(user,'OFFER_APPROVED','offer',row.id,{reference:b.approval_reference,currency:b.currency,firstMonthlyRenewalDate:monthlyDate});return ok({offer:row});
