@@ -114,6 +114,12 @@ create table if not exists manual_billing_cycles (
  unique(subscription_id,due_date)
 );
 create index if not exists idx_manual_cycles_open on manual_billing_cycles(status,due_date);
+-- Earlier recurring payments may have succeeded without a card token.
+-- Keep their paid records and resume only explicit manual invoicing.
+update public.subscriptions s set collection_method='MANUAL',status='ACTIVE',
+ rolling_manual=(s.term_code='MONTHLY_FLEX' and s.auto_renew=true)
+ from public.payment_requests p where s.initial_request_id=p.id
+ and p.status='PAID' and s.status='PAYMENT_METHOD_REQUIRED' and s.next_charge_at is not null;
 create index if not exists idx_auth_attempts_key on auth_attempts(source_hash,occurred_at);
 create index if not exists idx_offers_client on offers(client_id,created_at desc);
 create index if not exists idx_requests_client on payment_requests(client_id,created_at desc);

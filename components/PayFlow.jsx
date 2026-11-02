@@ -35,7 +35,7 @@ export default function PayFlow({token,offer}){
   try{
    const r=await fetch('/api/offer/checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token,term,cadence,collectionMethod,autoChargeConsent:collectionMethod==='AUTO'&&accepted,idempotencyKey:crypto.randomUUID()})});
    const d=await r.json();
-   if(!r.ok)throw Error(d.error||'Unable to start payment');
+   if(!r.ok)throw Error((collectionMethod==='AUTO'?'Automatic card setup is unavailable. Select Manual monthly payment and retry. ':'')+(d.error||'Unable to start payment'));
    window.location.assign(d.checkoutUrl);
   }catch(e){setError(e.message);setBusy(false)}
  }
@@ -103,7 +103,7 @@ export default function PayFlow({token,offer}){
      {hasFutureCharges&&<div className="summary-row"><span>Each later charge</span><b>{format(quote.futureCharge,quote.currency)}</b></div>}
      {quote.nextPaymentDate&&<div className="summary-row"><span>{quote.firstRenewalDate?'Finance-selected first renewal':'Next due date'}</span><b>{quote.nextPaymentDate}</b></div>}
      {quote.firstRenewalDate&&<p className="muted small">The first payment is collected when you complete checkout. Future monthly charges follow the {quote.renewalAnchorDay}{quote.renewalAnchorDay===1?'st':quote.renewalAnchorDay===2?'nd':quote.renewalAnchorDay===3?'rd':'th'} day of each month, or the last calendar day if that day does not exist.</p>}
-     <div className="summary-row"><span>{quote.rollingMonthly?'Authorization review date':'Term review/end'}</span><b>{quote.termEndDate}</b></div>
+     {!quote.rollingManual&&<div className="summary-row"><span>{quote.rollingMonthly?'Authorization review date':'Term review/end'}</span><b>{quote.termEndDate}</b></div>}
      <p className="muted small">{quote.rollingManual?'Rolling monthly service: you pay each invoice manually, with reminders until Finance stops the subscription.':quote.rollingMonthly?'Month-to-month commitment, with a maximum of 12 authorized automatic card charges before review.':'The selected commitment and frequency control the upcoming payments. Every manual installment is a separate one-time Kashier checkout.'}</p>
     </>}
    </>:<div className="selection-prompt">{recurring?'Select a commitment term and billing schedule to view the amount payable and any future charges.':'Calculating your approved payment…'}</div>}

@@ -324,6 +324,10 @@ export async function POST(req,{params}){
     const id=safeString(b.subscription_id,60);
     if(!/^[0-9a-f-]{36}$/i.test(id))throw Object.assign(Error('Invalid agreement'),{status:400});
     const updated=await transaction(async(c)=>{
+     const processing=(await c.query(`select count(*)::int n from payment_requests p join manual_billing_cycles mb
+      on mb.id=(p.calculation->>'billingCycleId')::uuid where mb.subscription_id=$1
+      and p.status='PROCESSING' and p.created_at>now()-interval '45 minutes'`,[id])).rows[0]?.n||0;
+     if(processing>0)throw Object.assign(Error('A monthly checkout is still processing. Please verify its outcome before cancelling this subscription.'),{status:409});
      const sub=(await c.query("update subscriptions set status='CANCELLED',cycles_remaining=0,next_charge_at=null,auto_renew=false,rolling_manual=false,token_encrypted=null,agreement_id=null where id=$1 and status in ('ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','RENEWAL_REVIEW_REQUIRED') returning id,offer_id",[id])).rows[0];
      if(sub)await c.query("update manual_billing_cycles set status='CANCELLED' where subscription_id=$1 and status='OPEN'",[id]);
      return sub;
