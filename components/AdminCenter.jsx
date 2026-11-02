@@ -11,98 +11,132 @@ function Table({head,rows,render,empty='No records yet.'}){return rows?.length?<
 function PasswordChange({done}){const [a,set]=useState({currentPassword:'',newPassword:'',repeat:''}),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);async function submit(e){e.preventDefault();if(a.newPassword!==a.repeat){setMsg('The new passwords do not match.');return;}setBusy(true);try{await api('auth/change-password',a);done()}catch(e){setMsg(e.message)}finally{setBusy(false)}}return <div className="force-change"><Brand/><div className="login-panel"><div className="eyebrow">ACCOUNT SECURITY</div><h1>Set your secure password</h1><p className="muted">To protect billing records, create your personal Finance password before continuing.</p><form onSubmit={submit} className="login-form"><label>Current password<input type="password" autoComplete="current-password" required value={a.currentPassword} onChange={e=>set({...a,currentPassword:e.target.value})}/></label><label>New password<input type="password" minLength="12" autoComplete="new-password" required value={a.newPassword} onChange={e=>set({...a,newPassword:e.target.value})}/></label><label>Confirm new password<input type="password" minLength="12" autoComplete="new-password" required value={a.repeat} onChange={e=>set({...a,repeat:e.target.value})}/></label><button className="button primary full" disabled={busy}>Update password and continue ↗</button></form>{msg&&<p className="alert" role="alert">{msg}</p>}</div></div>}
 function ClientForm({onSave}){const [s,set]=useState({legal_name:'',billing_email:'',locale:'en'}),[msg,setMsg]=useState('');async function submit(e){e.preventDefault();try{await api('admin/clients',s);set({legal_name:'',billing_email:'',locale:'en'});setMsg('Client added.');onSave()}catch(e){setMsg(e.message)}}return <form className="create-grid" onSubmit={submit}><label>Company / legal name<input required value={s.legal_name} onChange={e=>set({...s,legal_name:e.target.value})} placeholder="Client company name"/></label><label>Billing email<input type="email" required value={s.billing_email} onChange={e=>set({...s,billing_email:e.target.value})} placeholder="finance@client.com"/></label><label>Preferred language<select value={s.locale} onChange={e=>set({...s,locale:e.target.value})}><option value="en">English</option><option value="ar">Arabic</option></select></label><button className="button primary">Add client</button>{msg&&<span className="form-status">{msg}</span>}</form>}
 
-const terms=['MONTHLY_FLEX','COMMIT_3M','COMMIT_6M','COMMIT_12M'];
-const cadences=['MONTHLY','QUARTERLY','SEMIANNUAL','ANNUAL_UPFRONT'];
-const cadenceMonths={MONTHLY:1,QUARTERLY:3,SEMIANNUAL:6,ANNUAL_UPFRONT:12};
-const months={MONTHLY_FLEX:1,COMMIT_3M:3,COMMIT_6M:6,COMMIT_12M:12};
-const termInfo={
- MONTHLY_FLEX:{name:'Monthly Flex · 1 month',note:'No fixed multi-month commitment. Monthly payments still have a scheduled due date. Optional rolling billing can continue after month one.'},
- COMMIT_3M:{name:'3-month commitment',note:'Client commits for three months. Charge monthly or quarterly, according to the options you enable.'},
- COMMIT_6M:{name:'6-month commitment',note:'Client commits for six months. Choose the allowed monthly, quarterly, or six-month schedule.'},
- COMMIT_12M:{name:'12-month commitment',note:'Client commits for twelve months. Choose monthly, quarterly, six-monthly, or annual upfront payment.'}
-};
-const cadenceInfo={
- MONTHLY:{name:'Monthly',note:'Charge once per month, on the scheduled billing date. This controls timing, not commitment.'},
- QUARTERLY:{name:'Quarterly',note:'Charge every three months, covering three months of professional fees.'},
- SEMIANNUAL:{name:'Every 6 months',note:'Charge once every six months, covering six months of fees.'},
- ANNUAL_UPFRONT:{name:'Annual upfront',note:'Collect twelve months of professional fees in a single payment.'}
-};
-const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false,allow_auto_charge:false,first_monthly_renewal_date:''});
-const minMonthlyRenewalDate=()=>{const today=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const part=t=>today.find(x=>x.type===t).value;const d=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
+
+const termInfo={MONTHLY_FLEX:{name:'Monthly (legacy)'},COMMIT_3M:{name:'3-month (legacy)'},COMMIT_6M:{name:'6-month (legacy)'},COMMIT_12M:{name:'12-month (legacy)'}};
+const cadenceInfo={MONTHLY:{name:'Monthly'},QUARTERLY:{name:'Quarterly'},SEMIANNUAL:{name:'Every 6 months'},ANNUAL_UPFRONT:{name:'Yearly upfront'}};
+const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',
+ professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',
+ billing_period_months:1,plan_discount_type:'NONE',plan_discount_value:0,allow_auto_charge:true,first_monthly_renewal_date:''});
+const money2=n=>Math.round((Number(n)||0)*100)/100;
+const tomorrowCairo=()=>{const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const v=t=>parts.find(x=>x.type===t).value;
+ const d=new Date(`${v('year')}-${v('month')}-${v('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
+function PlanPricing({s}){
+ const months=Number(s.billing_period_months)||1,monthly=Number(s.professional_fee)||0,gross=money2(months*monthly);
+ const discType=s.plan_discount_type||'NONE',d=Number(s.plan_discount_value)||0;
+ const discount=discType==='PERCENT'?money2(gross*d/100):discType==='FIXED'?d:0;
+ const due=money2(Math.max(0,gross-discount));
+ return <div className="info-note pricing-preview" role="status">
+  <strong>Finance-approved price preview</strong>
+  <div className="summary-row"><span>Professional fee × {months} month{months===1?'':'s'}</span><b>{format(gross,s.currency)}</b></div>
+  {discount>0&&<div className="summary-row"><span>Package discount {discType==='PERCENT'?('('+d+'%)'):''}</span><b>− {format(discount,s.currency)}</b></div>}
+  <div className="summary-row"><span><strong>Every {months} month{months===1?'':'s'} (renewal)</strong></span><b>{format(due,s.currency)}</b></div>
+  <div className="summary-row"><span>First checkout (with setup & external costs)</span><b>{format(due+Number(s.setup_fee||0)+Number(s.pass_through_fee||0),s.currency)}</b></div>
+  <small className="field-help">Discount applies to the professional service package each billing period; setup and third-party costs apply to the first payment only. Taxes follow the approved tax policy.</small>
+ </div>;
+}
+function FinancePlanFields({s,set,prefix='new'}){
+ const selected=[1,3,6,12].includes(Number(s.billing_period_months))?String(s.billing_period_months):'custom';
+ const months=Number(s.billing_period_months);
+ const valid=months>=1&&months<=36&&Number.isInteger(months);
+ return <div className="term-config">
+  <h3>Finance-approved service package</h3>
+  <p className="muted">Finance decides the exact package, renewal interval, discount and first renewal date. The client cannot edit any of these.</p>
+  <div className="create-grid">
+   <label>Billing period / prepaid duration
+    <select value={selected} onChange={e=>set({...s,billing_period_months:e.target.value==='custom'?2:Number(e.target.value)})}>
+     <option value="1">Monthly · 1 month</option><option value="3">3 months</option>
+     <option value="6">6 months</option><option value="12">12 months</option><option value="custom">Custom months</option>
+    </select><span className="field-help">One invoice covers this number of months. Renewals repeat on the same interval.</span>
+   </label>
+   {selected==='custom'&&<label>Custom months (1–36)
+    <input type="number" min="1" max="36" step="1" required value={s.billing_period_months}
+      onChange={e=>set({...s,billing_period_months:e.target.value})}/></label>}
+   <label>Package discount
+    <select value={s.plan_discount_type} onChange={e=>set({...s,plan_discount_type:e.target.value,plan_discount_value:0})}>
+     <option value="NONE">No discount</option><option value="PERCENT">Percent off package</option><option value="FIXED">Fixed amount off package</option>
+    </select>
+   </label>
+   {s.plan_discount_type!=='NONE'&&<label>{s.plan_discount_type==='PERCENT'?'Discount (%)':'Discount ('+s.currency+')'}
+    <input type="number" min="0" max={s.plan_discount_type==='PERCENT'?100:undefined} step="0.01" required
+      value={s.plan_discount_value} onChange={e=>set({...s,plan_discount_value:e.target.value})}/>
+    <span className="field-help">Applied to the prepaid professional fee for every {months||'?'}-month period.</span></label>}
+   <label>Next scheduled renewal date
+    <input type="date" required min={tomorrowCairo()} value={s.first_monthly_renewal_date}
+      onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})}/>
+    <span className="field-help">The client pays the first package at checkout. Renewals then follow this date every {months||'?'} months. Auto-charge requires at least {months*25||25} days between payments; if the date is closer, manual links remain available.</span>
+   </label>
+  </div>
+  <label className="checkline rolling-option"><input type="checkbox" checked={!!s.allow_auto_charge}
+    onChange={e=>set({...s,allow_auto_charge:e.target.checked})}/>
+   <span><strong>Offer Auto-renew toggle to client</strong>
+   <small className="field-help">Recommended ON. The client must actively opt in before Kashier can save a card or authorize future payments. If OFF, the client pays via secure links and receives due reminders. Global live auto-charge authorization is separate.</small></span>
+  </label>
+  {!valid&&<p className="field-help option-warning">Choose a whole-number duration between 1 and 36 months.</p>}
+  <PlanPricing s={s}/>
+ </div>;
+}
 function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
  const recurring=s.transaction_family==='RECURRING';
- const requiresMonthlyRenewal=recurring&&s.allowed_terms.some(t=>(s.cadence_matrix[t]||[]).includes('MONTHLY')&&(t!=='MONTHLY_FLEX'||s.auto_renew));
- const ready=!recurring||(s.allowed_terms.length>0&&s.allowed_terms.every(t=>(s.cadence_matrix[t]||[]).length>0)&&(!requiresMonthlyRenewal||!!s.first_monthly_renewal_date));
+ const months=Number(s.billing_period_months),gross=money2(months*Number(s.professional_fee||0));
+ const validDiscount=s.plan_discount_type!=='PERCENT'||Number(s.plan_discount_value)<=100;
+ const fixedOkay=s.plan_discount_type!=='FIXED'||Number(s.plan_discount_value)<=gross;
+ const ready=!recurring||(Number.isInteger(months)&&months>=1&&months<=36&&!!s.first_monthly_renewal_date&&validDiscount&&fixedOkay&&gross>0);
  async function submit(e){
-  e.preventDefault();
-  if(!ready){setMsg(requiresMonthlyRenewal?'Choose the first monthly renewal date.':'Choose at least one term and at least one billing schedule per term.');return}
+  e.preventDefault();if(!ready){setMsg('Complete the approved billing months, renewal date and discount amount.');return}
   setBusy(true);setMsg('');
   try{
-   await api('admin/offers',{...s,first_monthly_renewal_date:requiresMonthlyRenewal?s.first_monthly_renewal_date:null});
-   set(cleanOffer());setMsg('Approved offer created. Generate or email its private payment link below.');onSave();
+   await api('admin/offers',s);set(cleanOffer());setMsg('Approved package created. Generate its private payment link below.');onSave();
   }catch(e){setMsg(e.message)}finally{setBusy(false)}
- }
- function toggle(t){
-  set(previous=>{
-   const enabled=previous.allowed_terms.includes(t);
-   const next=enabled?previous.allowed_terms.filter(x=>x!==t):[...previous.allowed_terms,t];
-   const matrix={...previous.cadence_matrix};
-   if(enabled)delete matrix[t];else matrix[t]=[];
-   return {...previous,allowed_terms:next,cadence_matrix:matrix,auto_renew:t==='MONTHLY_FLEX'?!enabled:previous.auto_renew};
-  });
- }
- function setCadence(t,c){
-  set(previous=>{
-   const current=previous.cadence_matrix[t]||[];
-   const updated=current.includes(c)?current.filter(x=>x!==c):[...current,c];
-   return {...previous,cadence_matrix:{...previous.cadence_matrix,[t]:updated}};
-  });
  }
  return <form onSubmit={submit} className="offer-form">
   <div className="create-grid">
    <label>Client<select required value={s.client_id} onChange={e=>set({...s,client_id:e.target.value})}><option value="">Select client</option>{(clients||[]).map(c=><option key={c.id} value={c.id}>{c.legal_name}</option>)}</select></label>
-   <label>Offer title<input required value={s.title} onChange={e=>set({...s,title:e.target.value})} placeholder="Approved growth system"/></label>
+   <label>Offer title<input required value={s.title} onChange={e=>set({...s,title:e.target.value})} placeholder="Monthly digital marketing service"/></label>
    <label>Proposal / SOW reference<input required value={s.commercial_reference} onChange={e=>set({...s,commercial_reference:e.target.value})} placeholder="MDS-SOW-..."/></label>
-   <label>Payment family<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value,allowed_terms:[],cadence_matrix:{},auto_renew:false,allow_auto_charge:false,first_monthly_renewal_date:''})}><option value="ONE_TIME">One-time / project payment</option><option value="RECURRING">Recurring engagement</option></select><span className="field-help">One-time collects once. Recurring lets you approve specific terms and future billing frequencies.</span></label>
-   <label>Commercial currency<select value={s.currency} onChange={e=>set({...s,currency:e.target.value})}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
-   <label>Approved professional fee {recurring?'(per month)':'(one-time)'}<input required type="number" min="0" step="0.01" value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/><span className="field-help">{recurring?'Enter the rate for one month; larger billing intervals multiply it automatically.':'Enter the single project charge.'}</span></label>
-   <label>Implementation / setup fee<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/><span className="field-help">Added to the first payment only.</span></label>
-   <label>Third-party / pass-through cost<input type="number" min="0" step="0.01" value={s.pass_through_fee} onChange={e=>set({...s,pass_through_fee:e.target.value})}/><span className="field-help">Added to the first payment only.</span></label>
+   <label>Payment type<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value})}><option value="ONE_TIME">One-time project payment</option><option value="RECURRING">Renewable service package</option></select></label>
+   <label>Currency<select value={s.currency} onChange={e=>set({...s,currency:e.target.value})}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
+   <label>Professional fee {recurring?'per month':'one-time'}<input required type="number" min="0" step="0.01" value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/></label>
+   <label>Implementation / setup (first payment only)<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/></label>
+   <label>Third-party costs (first payment only)<input type="number" min="0" step="0.01" value={s.pass_through_fee} onChange={e=>set({...s,pass_through_fee:e.target.value})}/></label>
    <label>Approval evidence / document<input required value={s.approval_reference} onChange={e=>set({...s,approval_reference:e.target.value})} placeholder="Approved proposal ID"/></label>
-   <label>Commercial approver<input required value={s.approved_by} onChange={e=>set({...s,approved_by:e.target.value})} placeholder="Full name / role"/></label>
+   <label>Approved by<input required value={s.approved_by} onChange={e=>set({...s,approved_by:e.target.value})} placeholder="Full name / role"/></label>
   </div>
-  {recurring?<div className="term-config">
-   <h3>1. Select commitment terms</h3>
-   <p className="muted">Select only the contracts approved for this client. No term or schedule is preselected. You may check or uncheck every option.</p>
-   {terms.map(t=><div className="term-row plan-option" key={t}>
-    <label className="checkline option-heading"><input type="checkbox" checked={s.allowed_terms.includes(t)} onChange={()=>toggle(t)}/><span><strong>{termInfo[t].name}</strong><small className="field-help">{termInfo[t].note}</small></span></label>
-    {s.allowed_terms.includes(t)&&<div className="cadence-pills">
-     <p className="option-subheading">2. Allowed payment schedules for this commitment (choose at least one)</p>
-     <div className="cadence-option-grid">
-     {cadences.filter(c=>months[t]>=cadenceMonths[c]&&months[t]%cadenceMonths[c]===0).map(c=><label className="checkline cadence-option" key={c}><input type="checkbox" checked={(s.cadence_matrix[t]||[]).includes(c)} onChange={()=>setCadence(t,c)}/><span><strong>{cadenceInfo[c].name}</strong><small className="field-help">{cadenceInfo[c].note}</small></span></label>)}
-     </div>
-    </div>}
-   </div>)}
-   {s.allowed_terms.includes('MONTHLY_FLEX')&&<label className="checkline rolling-option"><input type="checkbox" checked={s.auto_renew} onChange={e=>set({...s,auto_renew:e.target.checked})}/><span><strong>Continue monthly billing until Finance stops this service</strong><small className="field-help">Recommended for ongoing monthly services. Manual invoice links and reminders continue until this subscription is stopped. Automatic card collection, if separately enabled and accepted by the client, is limited to 12 approved charges before review. Turn off to make Monthly Flex a single payment.</small></span></label>}
-   {requiresMonthlyRenewal&&<div className="info-note" style={{marginTop:18}}>
-     <label htmlFor="first-monthly-renewal"><strong>First monthly renewal date</strong></label>
-     <p className="field-help">Finance chooses when the SECOND payment will be collected. The client pays the initial charge at checkout; later monthly payments fall on the same day number each month (or the last calendar day if needed). Manual renewals can be any future date. Automatic card billing requires a first renewal at least 25 days after checkout.</p>
-     <input id="first-monthly-renewal" type="date" required min={minMonthlyRenewalDate()} value={s.first_monthly_renewal_date} onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})} style={{maxWidth:280,marginTop:8}}/>
-     {s.first_monthly_renewal_date&&<p className="field-help">First scheduled renewal: <strong>{s.first_monthly_renewal_date}</strong>. Further renewals use this day of the month. If the client pays too close to this date, issue a new offer with a later date.</p>}
-   </div>}
-   {requiresMonthlyRenewal&&<label className="checkline rolling-option"><input type="checkbox" checked={s.allow_auto_charge} onChange={e=>set({...s,allow_auto_charge:e.target.checked})}/><span>
-     <strong>Allow the customer to opt in to automatic monthly card charges</strong>
-     <small className="field-help">Optional, OFF by default. If enabled, the client chooses Manual reminders or Auto-charge at checkout and must explicitly authorize card storage and scheduled payments. Auto-charge also requires the global Finance release switch and Kashier recurring access. Manual invoices always remain available.</small>
-   </span></label>}
-   {!ready&&<p className="field-help option-warning">{requiresMonthlyRenewal&&!s.first_monthly_renewal_date?'Choose the first monthly renewal date.':'Each commitment needs an enabled billing frequency.'}</p>}
-  </div>:<p className="info-note">A one-time payment needs no commitment term or recurring schedule. The client pays the approved project amount once; future card charges are not authorized.</p>}
-  <button className="button primary" disabled={busy||!ready}>{busy?'Saving approved offer…':'Create approved offer ↗'}</button>
-  {msg&&<div className="notice" role="status">{msg}</div>}
+  {recurring?<FinancePlanFields s={s} set={set}/>:<p className="info-note">One-time payment: the client pays the project amount once. No service renewal is created.</p>}
+  <button type="submit" className="button primary" disabled={busy||!ready}>{busy?'Saving…':'Create approved offer ↗'}</button>
+  {msg&&<p className="notice" role="status">{msg}</p>}
+ </form>;
+}
+function EditPlan({offer,onClose,onSave}){
+ const [s,set]=useState({billing_period_months:offer.billing_period_months||({'MONTHLY_FLEX':1,'COMMIT_3M':3,'COMMIT_6M':6,'COMMIT_12M':12}[offer.allowed_terms?.[0]]||1),
+  plan_discount_type:offer.plan_discount_type||'NONE',plan_discount_value:offer.plan_discount_value||0,
+  professional_fee:Number(offer.professional_fee),setup_fee:Number(offer.setup_fee),pass_through_fee:Number(offer.pass_through_fee),
+  currency:offer.currency,first_monthly_renewal_date:String(offer.first_monthly_renewal_date||'').slice(0,10),
+  allow_auto_charge:!!offer.allow_auto_charge});
+ const [busy,setBusy]=useState(false),[msg,setMsg]=useState('');
+ async function save(e){e.preventDefault();setBusy(true);setMsg('');
+  try{
+   await api('admin/update-offer-plan',{offer_id:offer.id,...s});
+   setMsg('Package reapproved. Old unpaid link has been invalidated. Generate and send a new secure link.');
+   onSave();
+  }catch(e){setMsg(e.message)}finally{setBusy(false)}
+ }
+ return <form className="offer-edit-form" onSubmit={save}>
+  <h3>Reconfigure unpaid offer: {offer.title}</h3>
+  <p className="muted small">This edit is allowed only before payment. Existing links are invalidated to prevent charging outdated prices; generate a fresh link afterward.</p>
+  <div className="create-grid">
+   <label>Monthly fee<input type="number" min="0" step="0.01" required value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/></label>
+   <label>Setup fee<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/></label>
+   <label>Third-party costs<input type="number" min="0" step="0.01" value={s.pass_through_fee} onChange={e=>set({...s,pass_through_fee:e.target.value})}/></label>
+  </div>
+  <FinancePlanFields s={s} set={set} prefix="edit"/>
+  <div className="row-inline"><button className="button primary" type="submit" disabled={busy}>{busy?'Saving…':'Save approved package'}</button><button className="button secondary" type="button" onClick={onClose}>Close</button></div>
+  {msg&&<p className="notice" role="status">{msg}</p>}
  </form>;
 }
 function Offers({rows,onSave,clients}){
  const [link,setLink]=useState(''),[msg,setMsg]=useState(''),[working,setWorking]=useState(''),[showRemoved,setShowRemoved]=useState(false);
+ const [editing,setEditing]=useState(null);
  async function toggleAuto(o){
   setWorking(o.id);setMsg('');
   try{
@@ -132,7 +166,8 @@ function Offers({rows,onSave,clients}){
    <div className="section-head"><div><h2>Approved offers</h2><p className="muted small">Remove an unused offer permanently, or archive a billed offer without erasing its payment records.</p></div><label className="checkline"><input type="checkbox" checked={showRemoved} onChange={e=>setShowRemoved(e.target.checked)}/>Show archived offers</label></div>
    {link&&<div className="link-result"><label>Latest secure payment link</label><div className="row-inline"><input readOnly value={link} aria-label="Secure payment link"/><button type="button" className="button secondary" onClick={()=>navigator.clipboard.writeText(link)}>Copy link</button></div></div>}
    {msg&&<div className="notice" role="status">{msg}</div>}
-   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?'Recurring · '+(o.allowed_terms||[]).map(t=>termInfo[t]?.name||t).join(' / ')+(o.allowed_terms?.includes('MONTHLY_FLEX')?(o.auto_renew?' · Rolling Monthly Flex enabled':' · Rolling Monthly Flex off'):'')+(o.first_monthly_renewal_date?' · First monthly renewal: '+String(o.first_monthly_renewal_date).slice(0,10):'')+(o.allow_auto_charge?' · Auto-charge opt-in available':' · Manual payment reminders only'):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button>{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} title="Only unpaid offers can change automatic collection availability" onClick={()=>toggleAuto(o)}>{o.allow_auto_charge?'Disable auto opt-in':'Allow auto opt-in'}</button>}
+   {editing&&<EditPlan key={editing.id} offer={editing} onClose={()=>setEditing(null)} onSave={()=>{onSave();setEditing(null)}}/>}
+   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?(o.billing_period_months?o.billing_period_months+'-month Finance package':'Legacy recurring offer · edit to lock terms')+(o.plan_discount_type==='PERCENT'?' · '+o.plan_discount_value+'% off':o.plan_discount_type==='FIXED'?' · '+format(o.plan_discount_value,o.currency)+' off':'')+(o.first_monthly_renewal_date?' · Renews '+String(o.first_monthly_renewal_date).slice(0,10):'')+(o.allow_auto_charge?' · Auto-renew available':' · Manual links only'):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button>{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} onClick={()=>setEditing(o)}>Edit plan</button>}{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} title="Only unpaid offers can change automatic collection availability" onClick={()=>toggleAuto(o)}>{o.allow_auto_charge?'Disable auto opt-in':'Allow auto opt-in'}</button>}
    <button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
   </div>
  </>;
@@ -158,7 +193,7 @@ function BillingAgreements({rows,operations,onSave}){
   {msg&&<p className="notice" role="status">{msg}</p>}
   <Table head={['Client / service','Billing method / plan','Next due','Amount','Pending invoice','Status','Controls']} rows={rows} render={s=><>
    <td><strong>{s.legal_name}</strong><small className="table-small">{s.title}</small></td>
-   <td><strong>{s.collection_method==='AUTO'?'Automatic card':'Manual payment links'}</strong><small className="table-small">{termInfo[s.term_code]?.name||s.term_code?.replaceAll('_',' ')} · {cadenceInfo[s.cadence_code]?.name||s.cadence_code}</small></td>
+   <td><strong>{s.collection_method==='AUTO'?'Automatic card':'Manual payment links'}</strong><small className="table-small">{s.billing_period_months>0?s.billing_period_months+'-month package':termInfo[s.term_code]?.name||s.term_code?.replaceAll('_',' ')} · {s.billing_period_months>0?'Every '+s.billing_period_months+' month(s)':cadenceInfo[s.cadence_code]?.name||s.cadence_code}</small></td>
    <td>{date(s.next_charge_at)}</td>
    <td>{format(s.recurring_amount,s.currency)}</td>
    <td>{s.pending_payment_link?<><a target="_blank" rel="noreferrer" className="text-link" href={s.pending_payment_link}>Open secure invoice ↗</a><small className="table-small">Due: {date(s.pending_due_date)} · Reminders sent: {s.pending_reminders||0}</small></>:<span className="muted">{s.status==='CANCELLED'?'Stopped':'Created on due date'}</span>}</td>
