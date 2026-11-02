@@ -17,7 +17,8 @@ export async function GET(request){
  // Manual reminders operate independently of the ENABLE_RECURRING_CHARGES flag.
  // Each service/offer has its own payment period and unique reminder link.
  const due=(await q(`select s.id from subscriptions s join offers o on o.id=s.offer_id
-  where s.collection_method='MANUAL' and s.status in ('ACTIVE','PAST_DUE')
+  where ((s.collection_method='MANUAL' and s.status in ('ACTIVE','PAST_DUE'))
+         or (s.collection_method='AUTO' and s.status='PAST_DUE'))
    and (s.rolling_manual=true or s.cycles_remaining>0)
    and s.next_charge_at is not null
    and (s.next_charge_at at time zone 'Africa/Cairo')::date <= (now() at time zone 'Africa/Cairo')::date
@@ -28,7 +29,8 @@ export async function GET(request){
     const s=(await c.query(`select s.*,o.title,o.status as offer_status,c.billing_email,c.legal_name,c.locale
      from subscriptions s join offers o on o.id=s.offer_id join client_accounts c on c.id=s.client_id
      where s.id=$1 for update of s`,[row.id])).rows[0];
-    if(!s||!['ACTIVE','PAST_DUE'].includes(s.status)||s.collection_method!=='MANUAL'
+    if(!s||!['ACTIVE','PAST_DUE'].includes(s.status)
+     ||!(s.collection_method==='MANUAL'||(s.collection_method==='AUTO'&&s.status==='PAST_DUE'))
      ||(!s.rolling_manual&&s.cycles_remaining<=0)||s.offer_status==='ARCHIVED')return null;
     const date=dateOnly(s.next_charge_at);
     if(!date||date>today)return null;
@@ -46,7 +48,9 @@ export async function GET(request){
    if(!message)continue;
    // A cancellation may have happened between claiming and composing the email.
    const eligible=await one(`select mb.id from manual_billing_cycles mb join subscriptions s on s.id=mb.subscription_id
-    where mb.id=$1 and mb.status='OPEN' and s.status in ('ACTIVE','PAST_DUE') and s.collection_method='MANUAL'`,[message.id]);
+    where mb.id=$1 and mb.status='OPEN' and
+    ((s.status in ('ACTIVE','PAST_DUE') and s.collection_method='MANUAL')
+     or (s.status='PAST_DUE' and s.collection_method='AUTO'))`,[message.id]);
    if(!eligible)continue;
    const token=cryptoDecode(message.link_token_encrypted);
    const delivered=await email({eventKey:reminderEventKey(message.id,today),template:'MANUAL_RENEWAL_DUE',
@@ -86,7 +90,7 @@ export async function GET(request){
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PROCESSING') returning id`,
       [s.offer_id,s.client_id,randomToken(12),reference,s.term_code,s.cadence_code,
        JSON.stringify({automaticRenewal:true,subscriptionId:s.id,collectionMethod:'AUTO',futureCharge:Number(s.recurring_amount),
-        cycleMonths:({MONTHLY:1,QUARTERLY:3,SEMIANNUAL:6,ANNUAL_UPFRONT:12})[s.cadence_code]||1,taxStatus:'AWAITING_FINANCE'}),
+        cycleMonths:s.billing_period_months||({MONTHLY:1,QUARTERLY:3,SEMIANNUAL:6,ANNUAL_UPFRONT:12})[s.cadence_code]||1,taxStatus:'AWAITING_FINANCE'}),
        s.recurring_amount,s.currency,gatewayMode()])).rows[0];
      await c.query("update subscriptions set status='PENDING_RENEWAL_PAYMENT' where id=$1",[s.id]);
      return {...s,paymentId:requestRow.id,orderReference:reference};
@@ -94,16 +98,31 @@ export async function GET(request){
     if(!claimed)continue;
     try{
      const result=await payWithToken({...claimed,card_token:cryptoDecode(claimed.token_encrypted)},claimed.orderReference);
-     autoSubmitted++;
-     await q('insert into audit_events(action,entity_type,entity_id,details) values($1,$2,$3,$4)',
-      ['RENEWAL_SUBMITTED','subscription',claimed.id,JSON.stringify({paymentId:claimed.paymentId,processorStatus:String(result?.status||'PENDING')})]);
+     const providerStatus=String(result?.data?.status||result?.status||'PENDING').toUpperCase();
+     if(['FAILED','FAILURE','DECLINED','REJECTED','INSUFFICIENT_FUNDS'].includes(providerStatus)){
+      // An explicit declined result is safe to invoice manually. Never repeat a token charge.
+      autoFailed++;
+      await q("update subscriptions set status='PAST_DUE' where id=$1 and status='PENDING_RENEWAL_PAYMENT'",[claimed.id]);
+      await q("update payment_requests set status='FAILED' where id=$1 and status='PROCESSING'",[claimed.paymentId]);
+      await q('insert into audit_events(action,entity_type,entity_id,details) values($1,$2,$3,$4)',
+       ['AUTO_RENEWAL_DECLINED','subscription',claimed.id,JSON.stringify({paymentId:claimed.paymentId,status:providerStatus})]);
+     }else{
+      autoSubmitted++;
+      await q('insert into audit_events(action,entity_type,entity_id,details) values($1,$2,$3,$4)',
+       ['RENEWAL_SUBMITTED','subscription',claimed.id,JSON.stringify({paymentId:claimed.paymentId,processorStatus:providerStatus})]);
+     }
     }catch(e){
      autoFailed++;
-     // Network uncertainty requires review before another charge or manual invoice.
-     await q("update subscriptions set status='PAYMENT_REVIEW_REQUIRED' where id=$1 and status='PENDING_RENEWAL_PAYMENT'",[claimed.id]);
-     await q("update payment_requests set status='REVIEW_REQUIRED' where id=$1 and status='PROCESSING'",[claimed.paymentId]);
-     await email({eventKey:`renewal-review:${claimed.paymentId}`,template:'RECURRING_PAYMENT_FAILED',
-      to:claimed.billing_email,company:claimed.legal_name,detail:'Please contact Finance; collection status needs verification.'}).catch(()=>{});
+     const confirmedDecline=['INSUFFICIENT_FUNDS','CARD_DECLINED','DECLINED','DO_NOT_HONOR'].includes(String(e?.providerCode||'').toUpperCase());
+     // For explicit insufficient funds, pause auto retries and issue a separate one-time checkout.
+     // For network errors or uncertain outcomes, require Finance reconciliation before any new charge.
+     await q("update subscriptions set status=$1 where id=$2 and status='PENDING_RENEWAL_PAYMENT'",
+      [confirmedDecline?'PAST_DUE':'PAYMENT_REVIEW_REQUIRED',claimed.id]);
+     await q("update payment_requests set status=$1 where id=$2 and status='PROCESSING'",
+      [confirmedDecline?'FAILED':'REVIEW_REQUIRED',claimed.paymentId]);
+     if(!confirmedDecline)
+      await email({eventKey:`renewal-review:${claimed.paymentId}`,template:'RECURRING_PAYMENT_FAILED',
+       to:claimed.billing_email,company:claimed.legal_name,detail:'Please contact Finance; collection status needs verification.'}).catch(()=>{});
     }
    }catch(e){autoFailed++;console.error('[MDS:auto-renewal:error]',{subscription:row.id,reason:String(e?.message||'').slice(0,140)})}
   }
