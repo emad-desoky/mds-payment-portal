@@ -75,6 +75,7 @@ export async function GET(request){
    and s.auto_charge_consent_at is not null
    and initial.calculation->>'collectionMethod'='AUTO'
    and initial.calculation->>'autoChargeConsentAt' is not null
+   and initial.calculation->>'autoRenewVersion'='finance-approved-v2'
    and (s.next_charge_at at time zone 'Africa/Cairo')::date <= (now() at time zone 'Africa/Cairo')::date
    and initial.mode='live'
    order by s.next_charge_at asc limit 20`);
@@ -87,6 +88,7 @@ export async function GET(request){
       where s.id=$1 and s.collection_method='AUTO' and s.status='ACTIVE' and s.cycles_remaining>0
       and s.auto_charge_consent_at is not null and initial.mode='live'
       and initial.calculation->>'collectionMethod'='AUTO'
+      and initial.calculation->>'autoRenewVersion'='finance-approved-v2'
       and (s.next_charge_at at time zone 'Africa/Cairo')::date <= (now() at time zone 'Africa/Cairo')::date
       for update of s skip locked`,[row.id])).rows[0];
      if(!s||!s.token_encrypted||!s.agreement_id)return null;

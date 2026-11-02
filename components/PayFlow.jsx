@@ -47,23 +47,23 @@ export default function PayFlow({token,offer}){
    </div>
    {recurring&&<div className="panel">
     <div className="row" style={{alignItems:'center',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}>
-     <h3 style={{margin:0}}>Auto-renewal</h3><span className="billing-chip is-on">Recommended</span>
+     <h3 style={{margin:0}}>Automatic renewal</h3>{allowAuto&&<span className="billing-chip is-on">Recommended</span>}
     </div>
-    <p className="muted">Your service package and renewal date have been set by MDS Finance. You only decide whether to authorize future automatic payments.</p>
+    <p className="muted">Your plan and renewal dates are already approved. Choose whether you'd like future payments to happen automatically.</p>
     <label className={'auto-renew-control '+(autoRenew?'auto-renew-active':'')}>
      <span><strong>Automatically renew my service</strong>
-      <small className="field-help">{allowAuto?'Switch ON to authorize Kashier to securely save your card and charge the approved package amount on each scheduled renewal date.':'Currently unavailable for this approved offer. Your initial payment and subsequent renewals can still be paid securely by link.'}</small>
-      <small className="field-help">{autoRenew?'Auto-renew ON — explicit card-charge authorization selected.':'Auto-renew OFF — you will receive secure payment links and reminders instead.'}</small>
+      <small className="field-help">{allowAuto?'Enjoy uninterrupted service with payments made automatically on your renewal dates.':'Please contact MDS Finance if you would like to enable automatic renewal.'}</small>
+      {autoRenew&&<small className="field-help">Automatic renewal is ON.</small>}
      </span>
      <input type="checkbox" role="switch" aria-label="Authorize automatic card renewal" checked={autoRenew} disabled={!allowAuto||busy}
       onChange={e=>setAutoRenew(e.target.checked)}/>
     </label>
-    {autoRenew?<p className="info-note">By enabling this toggle and continuing to checkout, you expressly authorize MDS to request automatic charges through Kashier for the approved {months}-month package at {quote?.nextPaymentDate||'the Finance-approved renewal date'} and subsequently every {months} month{months===1?'':'s'}, subject to the displayed amount and card agreement. You can request cancellation from MDS Finance. Kashier stores your card details securely.</p>
-     :<p className="info-note">Future renewals use one-time Kashier payment links. If an invoice is overdue or an automatic charge is declined, MDS sends a daily reminder while the service remains active. No repeated automatic charge is attempted for a declined invoice.</p>}
+    {autoRenew?<p className="info-note">I authorize Medical Digital Solutions to charge my saved card {quote?format(quote.futureCharge,quote.currency):'the approved amount'} on {quote?.nextPaymentDate||'the agreed renewal date'} and every {months} month{months===1?'':'s'} thereafter, for up to 12 scheduled payments. I may stop future renewals by contacting MDS Finance.</p>
+     :<p className="muted small">We'll email you when your next payment is due.</p>}
    </div>}
    <div className="panel review-panel">
     <h3>Secure payment</h3>
-    {loading?<p className="muted">Calculating the approved amount…</p>:<p>{recurring?(autoRenew?'Your first payment confirms the approved automatic-renewal mandate.':'Pay this invoice once now. Future invoices are sent separately on the Finance-approved dates.'):'This project payment is one-time.'}</p>}
+    {loading?<p className="muted">Calculating the approved amount…</p>:<p>{recurring?(autoRenew?'You are setting up automatic renewal for your approved plan.':'Pay today, and we’ll remind you when it’s time to renew.'):'This project payment is one-time.'}</p>}
     <button className="button primary full" type="button" disabled={!quote||loading||busy} onClick={proceed}>{busy?'Preparing secure checkout…':'Continue to secure payment ↗'}</button>
     <p className="muted small">By continuing, you approve the payment amount and terms displayed on this page. Card details are entered only on Kashier's secure checkout.</p>
    </div>
@@ -88,7 +88,7 @@ export default function PayFlow({token,offer}){
      <div className="summary-row"><span>Renewal option</span><b>{autoRenew?'Automatic card charge':'Secure payment link'}</b></div>
      {quote.nextPaymentDate&&<div className="summary-row"><span>First renewal</span><b>{quote.nextPaymentDate}</b></div>}
      {hasFutureCharges&&<div className="summary-row"><span>Renewal amount</span><b>{format(quote.futureCharge,quote.currency)}</b></div>}
-     {autoRenew&&<p className="muted small">Up to {quote.cycles} authorized card payments in this agreement. A new authorization is required before charging beyond that limit.</p>}
+     {autoRenew&&<p className="muted small">Automatic payments stop when your approved authorization ends or you cancel through MDS Finance.</p>}
     </>}
    </>:<p className="selection-prompt">{loading?'Loading your Finance-approved amount…':'The approved price is temporarily unavailable.'}</p>}
    <div className="checkout-assurance">◈ Encrypted checkout by Kashier. Your card details are never entered on this website.</div>

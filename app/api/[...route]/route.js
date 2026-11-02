@@ -182,7 +182,7 @@ export async function POST(req,{params}){
     if(method==='AUTO'&&!recurringChargesEnabled())throw Object.assign(Error('Automatic renewal is not currently available. Switch Auto-renew off to pay manually.'),{status:409});
     if(method==='AUTO'&&b.autoChargeConsent!==true)throw Object.assign(Error('Explicit consent to automatic card charging is required.'),{status:400});
     const calc=calculateApprovedOffer(offer,method);
-    if(method==='AUTO')calc.autoChargeConsentAt=new Date().toISOString();
+    if(method==='AUTO'){calc.autoChargeConsentAt=new Date().toISOString();calc.autoRenewVersion='finance-approved-v2';}
     if(!Number.isFinite(calc.firstCharge)||calc.firstCharge<=0)throw Object.assign(Error('Payment amount must be greater than zero'),{status:400});
     const prior=await one("select * from payment_requests where offer_id=$1 and status in('PROCESSING','PAID') order by created_at desc limit 1",[offer.id]);
     const retryId=await verifyExpiredCheckoutBeforeRetry(prior);
