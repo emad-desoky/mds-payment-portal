@@ -20,6 +20,23 @@ function err(e,route='unknown'){
 const path=p=>p.route.join('/');
 const json=async(req)=>{const body=await req.json();if(!body||typeof body!=='object'||Array.isArray(body))throw Object.assign(Error('Invalid request'),{status:400});return body;};
 async function offerFromToken(token){if(!token||token.length<24||token.length>200)return null;return one(`select o.*,c.legal_name,c.billing_email,c.locale from offers o join client_accounts c on c.id=o.client_id where o.link_hash=$1 and o.status='SENT' and o.link_expires_at>now()`,[hexhash(token)]);}
+async function verifyExpiredCheckoutBeforeRetry(row){
+ if(!row||row.status!=='PROCESSING'||Date.now()-new Date(row.created_at).getTime()<=45*60*1000)return null;
+ if(!row.session_id&&!row.gateway_url)return row.id; // Client never obtained a payment URL.
+ if(!row.session_id)throw Object.assign(Error('Previous payment requires Finance verification before a new checkout can be started.'),{status:409});
+ let status;
+ try{
+  const checked=await verifySession(row.session_id,row.mode);
+  status=String(checked?.data?.status||checked?.status||'').toUpperCase();
+ }catch(e){
+  console.error('[MDS:checkout:verification-unavailable]',{requestId:row.id,code:e?.code||'LOOKUP_ERROR'});
+  throw Object.assign(Error('A previous checkout must be verified before retrying. Please contact MDS Finance.'),{status:409});
+ }
+ // Never issue a second payment for a session that may have been charged.
+ if(!['EXPIRED','FAILED','ABANDONED','REJECTED','VOIDED','REVERSED'].includes(status))
+  throw Object.assign(Error('A previous checkout may still be processing or paid. Please contact Finance for verification before retrying.'),{status:409,code:'PAYMENT_VERIFICATION_REQUIRED'});
+ return row.id;
+}
 export async function GET(req,{params}){
  const p=path(await params);const url=new URL(req.url);
  try{
@@ -162,12 +179,15 @@ export async function POST(req,{params}){
     const calc=calculate(offer,b.term,b.cadence,new Date(),method);
     if(method==='AUTO')calc.autoChargeConsentAt=new Date().toISOString();
     if(!Number.isFinite(calc.firstCharge)||calc.firstCharge<=0)throw Object.assign(Error('Payment amount must be greater than zero'),{status:400});
+    const prior=await one("select * from payment_requests where offer_id=$1 and status in('PROCESSING','PAID') order by created_at desc limit 1",[offer.id]);
+    const retryId=await verifyExpiredCheckoutBeforeRetry(prior);
     const payment=await transaction(async(c)=>{
       await c.query('select id from offers where id=$1 for update',[offer.id]);
       const existing=(await c.query("select * from payment_requests where offer_id=$1 and status in('PROCESSING','PAID') order by created_at desc limit 1",[offer.id])).rows[0];
       if(existing){
        if(existing.status==='PAID')throw Object.assign(Error('This offer has already been paid. Other services can be billed separately, and monthly installments use their own payment links.'),{status:409});
        if(Date.now()-new Date(existing.created_at).getTime()>45*60*1000){
+        if(retryId!==existing.id)throw Object.assign(Error('The prior checkout must be verified before retrying.'),{status:409});
         await c.query("update payment_requests set status='FAILED' where id=$1 and status='PROCESSING'",[existing.id]);
        }else{
         if(existing.calculation?.collectionMethod!==method)throw Object.assign(Error('Another checkout mode is currently preparing. Please retry after it expires or contact Finance.'),{status:409});
@@ -190,6 +210,11 @@ export async function POST(req,{params}){
     await rateLimit('manual-cycle-checkout',12,30);
     const token=safeString(b.token,200);
     if(token.length<24)throw Object.assign(Error('Payment link is not valid'),{status:404});
+    const upcoming=await one("select id from manual_billing_cycles where link_hash=$1",[hexhash(token)]);
+    if(!upcoming)throw Object.assign(Error('Monthly invoice link not found'),{status:404});
+    const prior=await one(`select * from payment_requests where calculation->>'billingCycleId'=$1
+     and status in ('PROCESSING','PAID') order by created_at desc limit 1`,[upcoming.id]);
+    const retryId=await verifyExpiredCheckoutBeforeRetry(prior);
     const result=await transaction(async(c)=>{
      const cycle=(await c.query(`select mb.*,s.status as subscription_status,s.collection_method,s.offer_id,s.client_id,
       s.term_code,s.cadence_code,o.title,o.transaction_family,c.billing_email,c.locale
@@ -202,9 +227,10 @@ export async function POST(req,{params}){
       and status in ('PROCESSING','PAID') order by created_at desc limit 1`,[cycle.id])).rows[0];
      if(existing){
       if(existing.status==='PAID')throw Object.assign(Error('This monthly payment is already completed.'),{status:409});
-      if(Date.now()-new Date(existing.created_at).getTime()>45*60*1000)
+      if(Date.now()-new Date(existing.created_at).getTime()>45*60*1000){
+       if(retryId!==existing.id)throw Object.assign(Error('Previous payment needs Finance verification before retrying.'),{status:409});
        await c.query("update payment_requests set status='FAILED' where id=$1 and status='PROCESSING'",[existing.id]);
-      else if(existing.gateway_url)return {existing:true,request:existing};
+      }else if(existing.gateway_url)return {existing:true,request:existing};
       else throw Object.assign(Error('Checkout is being prepared. Please retry in a moment.'),{status:409});
      }
      const ref=randomToken(12),order=`MDS-REN-${Date.now()}-${crypto.randomInt(100000,999999)}`;
