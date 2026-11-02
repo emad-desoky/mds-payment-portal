@@ -43,7 +43,8 @@ export async function GET(req,{params}){
  try{
   if(p==='health')return ok({service:'MDS Payments',status:'online'});
   if(p==='auth/me'){const user=await getUser();return ok({user:user?{username:user.username,role:user.role,clientId:user.client_id,passwordResetRequired:user.password_reset_required}:null});}
-  if(p==='offer'){const offer=await offerFromToken(url.searchParams.get('token'));if(!offer)return ok({valid:false});return ok({valid:true,offer:{title:offer.title,ref:offer.commercial_reference,client:offer.legal_name,currency:offer.currency,kind:offer.transaction_family,terms:offer.allowed_terms,matrix:offer.cadence_matrix,benefit:offer.benefit_kind,allowAutoCharge:!!offer.allow_auto_charge,autoChargeOperational:recurringChargesEnabled(),expiresAt:offer.link_expires_at}});}
+  if(p==='offer'){const offer=await offerFromToken(url.searchParams.get('token'));if(!offer)return ok({valid:false});return ok({valid:true,offer:{title:offer.title,ref:offer.commercial_reference,client:offer.legal_name,currency:offer.currency,kind:offer.transaction_family,
+     billingMonths:offer.billing_period_months||null,allowAutoCharge:!!offer.allow_auto_charge,autoChargeOperational:recurringChargesEnabled(),expiresAt:offer.link_expires_at}});}
   if(p==='manual-cycle'){
    const token=url.searchParams.get('token');
    if(!token||token.length<24||token.length>200)return ok({valid:false});
@@ -52,7 +53,8 @@ export async function GET(req,{params}){
     from manual_billing_cycles mb join subscriptions s on s.id=mb.subscription_id
     join offers o on o.id=s.offer_id join client_accounts c on c.id=s.client_id
     where mb.link_hash=$1`,[hexhash(token)]);
-   if(!cycle||cycle.status!=='OPEN'||!['ACTIVE','PAST_DUE'].includes(cycle.subscription_status)||cycle.collection_method!=='MANUAL')
+   if(!cycle||cycle.status!=='OPEN'||!['ACTIVE','PAST_DUE'].includes(cycle.subscription_status)
+     ||!(cycle.collection_method==='MANUAL'||(cycle.collection_method==='AUTO'&&cycle.subscription_status==='PAST_DUE')))
     return ok({valid:false});
    return ok({valid:true,cycle:{title:cycle.title,company:cycle.legal_name,reference:cycle.commercial_reference,
     amount:cycle.amount,currency:cycle.currency,dueDate:dateOnly(cycle.due_date),status:cycle.status}});
@@ -72,7 +74,9 @@ export async function GET(req,{params}){
      where s.client_id=$1 order by s.created_at desc limit 50`,[clientId])).rows;
    const cycles=(await q(`select mb.id,mb.subscription_id,mb.due_date,mb.amount,mb.currency,mb.status,mb.link_token_encrypted,o.title
      from manual_billing_cycles mb join subscriptions s on s.id=mb.subscription_id join offers o on o.id=s.offer_id
-     where s.client_id=$1 and mb.status='OPEN' and s.status in ('ACTIVE','PAST_DUE') and s.collection_method='MANUAL'
+     where s.client_id=$1 and mb.status='OPEN' and
+      ((s.collection_method='MANUAL' and s.status in ('ACTIVE','PAST_DUE'))
+       or (s.collection_method='AUTO' and s.status='PAST_DUE'))
      order by mb.due_date asc limit 50`,[clientId])).rows.map(({link_token_encrypted,...cycle})=>({...cycle,
       link:`${process.env.APP_URL}/pay-renewal/${encodeURIComponent(cryptoDecode(link_token_encrypted))}`}));
 
@@ -218,12 +222,13 @@ export async function POST(req,{params}){
     const retryId=await verifyExpiredCheckoutBeforeRetry(prior);
     const result=await transaction(async(c)=>{
      const cycle=(await c.query(`select mb.*,s.status as subscription_status,s.collection_method,s.offer_id,s.client_id,
-      s.term_code,s.cadence_code,o.title,o.transaction_family,c.billing_email,c.locale
+      s.term_code,s.cadence_code,s.billing_period_months,o.title,o.transaction_family,c.billing_email,c.locale
       from manual_billing_cycles mb join subscriptions s on s.id=mb.subscription_id
       join offers o on o.id=s.offer_id join client_accounts c on c.id=s.client_id
       where mb.link_hash=$1 for update of mb`,[hexhash(token)])).rows[0];
      if(!cycle||cycle.status!=='OPEN'||!['ACTIVE','PAST_DUE'].includes(cycle.subscription_status)
-       ||cycle.collection_method!=='MANUAL')throw Object.assign(Error('This billing cycle is already paid or no longer active.'),{status:409});
+       ||!(cycle.collection_method==='MANUAL'||(cycle.collection_method==='AUTO'&&cycle.subscription_status==='PAST_DUE')))
+       throw Object.assign(Error('This billing cycle is already paid or no longer active.'),{status:409});
      const existing=(await c.query(`select * from payment_requests where calculation->>'billingCycleId'=$1
       and status in ('PROCESSING','PAID') order by created_at desc limit 1`,[cycle.id])).rows[0];
      if(existing){
@@ -236,7 +241,7 @@ export async function POST(req,{params}){
      }
      const ref=randomToken(12),order=`MDS-REN-${Date.now()}-${crypto.randomInt(100000,999999)}`;
      const calculation={billingCycleId:cycle.id,subscriptionId:cycle.subscription_id,collectionMethod:'MANUAL',
-      futureCharge:Number(cycle.amount),cycleMonths:CADENCE_MONTHS[cycle.cadence_code]||1,
+      futureCharge:Number(cycle.amount),cycleMonths:cycle.billing_period_months||CADENCE_MONTHS[cycle.cadence_code]||1,
       cycleDueDate:dateOnly(cycle.due_date),taxStatus:'AWAITING_FINANCE'};
      const created=(await c.query(`insert into payment_requests(offer_id,client_id,public_reference,merchant_order_id,
        idempotency_key,term_code,cadence_code,calculation,amount,currency,mode,status)
