@@ -1251,3 +1251,19 @@ button.danger-inline:disabled,.offer-actions button:disabled { opacity:.5; curso
 .offer-edit-form{margin:16px 0;padding:20px;border:1px solid #b3dce6;border-radius:16px;background:#fbfeff}.offer-edit-form h3{margin:0 0 8px}
 .pricing-preview{margin-top:20px}.pricing-preview>.summary-row{padding:7px 0}.pricing-preview>strong{display:block;margin-bottom:12px}
 @media(max-width:600px){.approved-plan{grid-template-columns:1fr}.auto-renew-control{padding:13px;gap:9px}.auto-renew-control input[role=switch]{width:50px}}
+
+/* Finance-priced payment packages */
+.plan-choice-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px}
+.plan-choice{display:flex;flex-direction:column;align-items:flex-start;gap:9px;padding:18px;
+ background:#fff;border:1px solid #d9e6ed;border-radius:17px;color:#163a4f;text-align:left;cursor:pointer;
+ font:inherit;transition:border-color .15s ease,background .15s ease}
+.plan-choice:hover{border-color:#56b9cf;background:#f5fcfe}
+.plan-choice-selected,.plan-choice[aria-pressed=true]{border:2px solid #09a9c6;background:#ebf9fc;padding:17px}
+.plan-choice:focus-visible{outline:3px solid #028daa;outline-offset:3px}
+.plan-choice-heading{display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;width:100%}
+.plan-choice-heading strong{font-size:14px}
+.plan-choice-total{font-size:24px;font-weight:800;letter-spacing:-.7px;line-height:1.2}
+.plan-saving{font-size:11px;font-weight:750;background:#e5f8ef;color:#23704c;border:1px solid #b9e7ce;padding:5px 8px;border-radius:99px}
+.plan-choice-original{font-size:12px;color:#6e8591}
+.plan-choice .field-help{margin:0}
+@media(max-width:620px){.plan-choice-grid{grid-template-columns:1fr}.plan-choice{padding:15px}.plan-choice-selected{padding:14px}}
