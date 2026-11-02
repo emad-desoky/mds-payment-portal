@@ -27,7 +27,7 @@ const cadenceInfo={
  SEMIANNUAL:{name:'Every 6 months',note:'Charge once every six months, covering six months of fees.'},
  ANNUAL_UPFRONT:{name:'Annual upfront',note:'Collect twelve months of professional fees in a single payment.'}
 };
-const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false,first_monthly_renewal_date:''});
+const cleanOffer=()=>({client_id:'',title:'',commercial_reference:'',transaction_family:'ONE_TIME',currency:'EGP',professional_fee:0,setup_fee:0,pass_through_fee:0,approval_reference:'',approved_by:'',allowed_terms:[],cadence_matrix:{},auto_renew:false,allow_auto_charge:false,first_monthly_renewal_date:''});
 const minMonthlyRenewalDate=()=>{const today=new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Cairo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const part=t=>today.find(x=>x.type===t).value;const d=new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+25);return d.toISOString().slice(0,10)};
 function OfferForm({clients,onSave}){
  const [s,set]=useState(cleanOffer),[msg,setMsg]=useState(''),[busy,setBusy]=useState(false);
@@ -64,7 +64,7 @@ function OfferForm({clients,onSave}){
    <label>Client<select required value={s.client_id} onChange={e=>set({...s,client_id:e.target.value})}><option value="">Select client</option>{(clients||[]).map(c=><option key={c.id} value={c.id}>{c.legal_name}</option>)}</select></label>
    <label>Offer title<input required value={s.title} onChange={e=>set({...s,title:e.target.value})} placeholder="Approved growth system"/></label>
    <label>Proposal / SOW reference<input required value={s.commercial_reference} onChange={e=>set({...s,commercial_reference:e.target.value})} placeholder="MDS-SOW-..."/></label>
-   <label>Payment family<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value,allowed_terms:[],cadence_matrix:{},auto_renew:false,first_monthly_renewal_date:''})}><option value="ONE_TIME">One-time / project payment</option><option value="RECURRING">Recurring engagement</option></select><span className="field-help">One-time collects once. Recurring lets you approve specific terms and future billing frequencies.</span></label>
+   <label>Payment family<select value={s.transaction_family} onChange={e=>set({...s,transaction_family:e.target.value,allowed_terms:[],cadence_matrix:{},auto_renew:false,allow_auto_charge:false,first_monthly_renewal_date:''})}><option value="ONE_TIME">One-time / project payment</option><option value="RECURRING">Recurring engagement</option></select><span className="field-help">One-time collects once. Recurring lets you approve specific terms and future billing frequencies.</span></label>
    <label>Commercial currency<select value={s.currency} onChange={e=>set({...s,currency:e.target.value})}><option value="EGP">EGP</option><option value="USD">USD</option></select></label>
    <label>Approved professional fee {recurring?'(per month)':'(one-time)'}<input required type="number" min="0" step="0.01" value={s.professional_fee} onChange={e=>set({...s,professional_fee:e.target.value})}/><span className="field-help">{recurring?'Enter the rate for one month; larger billing intervals multiply it automatically.':'Enter the single project charge.'}</span></label>
    <label>Implementation / setup fee<input type="number" min="0" step="0.01" value={s.setup_fee} onChange={e=>set({...s,setup_fee:e.target.value})}/><span className="field-help">Added to the first payment only.</span></label>
@@ -91,6 +91,10 @@ function OfferForm({clients,onSave}){
      <input id="first-monthly-renewal" type="date" required min={minMonthlyRenewalDate()} value={s.first_monthly_renewal_date} onChange={e=>set({...s,first_monthly_renewal_date:e.target.value})} style={{maxWidth:280,marginTop:8}}/>
      {s.first_monthly_renewal_date&&<p className="field-help">First scheduled renewal: <strong>{s.first_monthly_renewal_date}</strong>. Further renewals use this day of the month. If the client pays too close to this date, issue a new offer with a later date.</p>}
    </div>}
+   {requiresMonthlyRenewal&&<label className="checkline rolling-option"><input type="checkbox" checked={s.allow_auto_charge} onChange={e=>set({...s,allow_auto_charge:e.target.checked})}/><span>
+     <strong>Allow the customer to opt in to automatic monthly card charges</strong>
+     <small className="field-help">Optional, OFF by default. If enabled, the client chooses Manual reminders or Auto-charge at checkout and must explicitly authorize card storage and scheduled payments. Auto-charge also requires the global Finance release switch and Kashier recurring access. Manual invoices always remain available.</small>
+   </span></label>}
    {!ready&&<p className="field-help option-warning">{requiresMonthlyRenewal&&!s.first_monthly_renewal_date?'Choose the first monthly renewal date.':'Each commitment needs an enabled billing frequency.'}</p>}
   </div>:<p className="info-note">A one-time payment needs no commitment term or recurring schedule. The client pays the approved project amount once; future card charges are not authorized.</p>}
   <button className="button primary" disabled={busy||!ready}>{busy?'Saving approved offer…':'Create approved offer ↗'}</button>
@@ -99,6 +103,14 @@ function OfferForm({clients,onSave}){
 }
 function Offers({rows,onSave,clients}){
  const [link,setLink]=useState(''),[msg,setMsg]=useState(''),[working,setWorking]=useState(''),[showRemoved,setShowRemoved]=useState(false);
+ async function toggleAuto(o){
+  setWorking(o.id);setMsg('');
+  try{
+   const x=await api('admin/toggle-auto-charge',{offer_id:o.id,enabled:!o.allow_auto_charge});
+   setMsg(x.allowAutoCharge?'Client Auto-charge opt-in is now allowed for this offer.':'Auto-charge disabled for this unpaid offer.');
+   onSave();
+  }catch(e){setMsg(e.message)}finally{setWorking('')}
+ }
  const visible=showRemoved?rows:(rows||[]).filter(o=>o.status!=='ARCHIVED');
  async function send(o,sendEmail){
   setWorking(o.id);setMsg('');
@@ -120,35 +132,41 @@ function Offers({rows,onSave,clients}){
    <div className="section-head"><div><h2>Approved offers</h2><p className="muted small">Remove an unused offer permanently, or archive a billed offer without erasing its payment records.</p></div><label className="checkline"><input type="checkbox" checked={showRemoved} onChange={e=>setShowRemoved(e.target.checked)}/>Show archived offers</label></div>
    {link&&<div className="link-result"><label>Latest secure payment link</label><div className="row-inline"><input readOnly value={link} aria-label="Secure payment link"/><button type="button" className="button secondary" onClick={()=>navigator.clipboard.writeText(link)}>Copy link</button></div></div>}
    {msg&&<div className="notice" role="status">{msg}</div>}
-   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?'Recurring · '+(o.allowed_terms||[]).map(t=>termInfo[t]?.name||t).join(' / ')+(o.allowed_terms?.includes('MONTHLY_FLEX')?(o.auto_renew?' · Rolling Monthly Flex enabled':' · Rolling Monthly Flex off'):'')+(o.first_monthly_renewal_date?' · First monthly renewal: '+String(o.first_monthly_renewal_date).slice(0,10):''):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button><button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
+   <Table head={['Client','Approved scope','Currency','Fee','Status','Actions']} rows={visible} render={o=><><td>{o.legal_name}</td><td><strong>{o.title}</strong><small className="table-small">{o.commercial_reference}</small><small className="table-small">{o.transaction_family==='RECURRING'?'Recurring · '+(o.allowed_terms||[]).map(t=>termInfo[t]?.name||t).join(' / ')+(o.allowed_terms?.includes('MONTHLY_FLEX')?(o.auto_renew?' · Rolling Monthly Flex enabled':' · Rolling Monthly Flex off'):'')+(o.first_monthly_renewal_date?' · First monthly renewal: '+String(o.first_monthly_renewal_date).slice(0,10):'')+(o.allow_auto_charge?' · Auto-charge opt-in available':' · Manual payment reminders only'):'One-time / no future charges'}</small></td><td>{o.currency}</td><td>{format(o.professional_fee,o.currency)}</td><td><Status value={o.status}/></td><td>{o.status==='ARCHIVED'?<span className="muted">Removed</span>:<div className="table-actions offer-actions"><button type="button" disabled={!!working} onClick={()=>send(o,false)}>Generate</button><button type="button" disabled={!!working} onClick={()=>send(o,true)}>Email</button>{o.transaction_family==='RECURRING'&&<button type="button" disabled={!!working} title="Only unpaid offers can change automatic collection availability" onClick={()=>toggleAuto(o)}>{o.allow_auto_charge?'Disable auto opt-in':'Allow auto opt-in'}</button>}
+   <button type="button" className="danger-inline" disabled={!!working} onClick={()=>remove(o)}>Remove</button></div>}</td></>}/>
   </div>
  </>;
 }
 function BillingAgreements({rows,operations,onSave}){
  const [working,setWorking]=useState(''),[msg,setMsg]=useState('');
  async function stop(s){
-  if(!window.confirm('Stop all future automatic charges for this agreement? Existing payments remain unchanged.'))return;
+  if(!window.confirm('Remove this subscription from future billing? It will STOP all reminders, payment links and automatic card charges; paid invoices will remain saved.'))return;
   setWorking(s.id);setMsg('');
-  try{await api('admin/stop-renewals',{subscription_id:s.id});setMsg('Future automatic charges stopped. Existing billing records were retained.');onSave()}
+  try{await api('admin/stop-renewals',{subscription_id:s.id});setMsg('Subscription stopped. Future invoices, reminders and card charges disabled.');onSave()}
   catch(e){setMsg(e.message)}finally{setWorking('')}
  }
- const running=operations?.renewalsEnabled===true;
+ async function manual(s){
+  if(!window.confirm('Disable automatic card charges and switch this subscription to manual payment links and reminders?'))return;
+  setWorking(s.id);setMsg('');
+  try{await api('admin/disable-auto-charge',{subscription_id:s.id});setMsg('Automatic card charges disabled; monthly invoice reminders will be used.');onSave()}
+  catch(e){setMsg(e.message)}finally{setWorking('')}
+ }
  return <div className="section-card">
-  <div className="section-head"><h2>Billing agreements</h2><span className={'billing-chip '+(running?'is-on':'is-off')}>{running?'Automatic collections enabled':'Automatic collections paused'}</span></div>
-  <p className="muted small">Kashier saves authorized card agreements at the initial checkout. MDS runs approved renewal charges on their scheduled dates through the daily collection job (08:00 UTC). A subscription without a saved token and agreement cannot be charged automatically.</p>
-  {!operations?.cronConfigured&&<p className="info-note">Scheduled collections require a CRON_SECRET in Vercel Production. The billing job is not authorized without it.</p>}
-  {!running&&<p className="info-note">New payments can still be received. Future charges are not submitted automatically until Finance enables recurring collections in the production environment.</p>}
+  <div className="section-head"><h2>Service subscriptions</h2><span className={'billing-chip '+(operations?.manualReminders?'is-on':'is-off')}>{operations?.manualReminders?'Manual reminders scheduled':'Reminder scheduler not configured'}</span></div>
+  <p className="muted small">Each service has its own billing agreement and monthly installment. Manual is the default: clients receive a secure one-time Kashier checkout link and reminders once per overdue day until paid or stopped. No saved card is required. Auto-charge is only offered when Finance enables it and the client consents during checkout.</p>
+  {!operations?.cronConfigured&&<p className="info-note">Add a Production CRON_SECRET to Vercel so the daily email reminders can run.</p>}
   {msg&&<p className="notice" role="status">{msg}</p>}
-  <Table head={['Client / service','Commitment / schedule','Recurring amount','Next due','Remaining','Card agreement','Status','Control']} rows={rows} render={s=><>
+  <Table head={['Client / service','Billing method / plan','Next due','Amount','Pending invoice','Status','Controls']} rows={rows} render={s=><>
    <td><strong>{s.legal_name}</strong><small className="table-small">{s.title}</small></td>
-   <td><strong>{termInfo[s.term_code]?.name||s.term_code?.replaceAll('_',' ')}</strong><small className="table-small">{cadenceInfo[s.cadence_code]?.name||s.cadence_code}</small></td>
-   <td>{format(s.recurring_amount,s.currency)}</td>
+   <td><strong>{s.collection_method==='AUTO'?'Automatic card':'Manual payment links'}</strong><small className="table-small">{termInfo[s.term_code]?.name||s.term_code?.replaceAll('_',' ')} · {cadenceInfo[s.cadence_code]?.name||s.cadence_code}</small></td>
    <td>{date(s.next_charge_at)}</td>
-   <td>{s.cycles_remaining}</td>
-   <td>{s.cycles_remaining>0?(s.card_saved&&s.agreement_saved?<span className="state green">Ready</span>:<span className="state amber">Token missing</span>):<span className="muted">Not required</span>}</td>
-   <td><Status value={s.status}/></td>
-   <td>{['ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','RENEWAL_REVIEW_REQUIRED'].includes(s.status)?<button type="button" className="danger-inline" disabled={!!working} onClick={()=>stop(s)}>Stop future charges</button>:<span className="muted">{s.status==='CANCELLED'?'Stopped':'—'}</span>}</td>
+   <td>{format(s.recurring_amount,s.currency)}</td>
+   <td>{s.pending_payment_link?<><a target="_blank" rel="noreferrer" className="text-link" href={s.pending_payment_link}>Open secure invoice ↗</a><small className="table-small">Due: {date(s.pending_due_date)} · Reminders sent: {s.pending_reminders||0}</small></>:<span className="muted">{s.status==='CANCELLED'?'Stopped':'Created on due date'}</span>}</td>
+   <td><Status value={s.status}/>{s.collection_method==='AUTO'&&<small className="table-small">{s.card_saved&&s.agreement_saved?'Card authorized':'Card agreement missing'}</small>}</td>
+   <td><div className="table-actions offer-actions">{s.collection_method==='AUTO'&&['ACTIVE','PAST_DUE'].includes(s.status)&&<button type="button" disabled={!!working} onClick={()=>manual(s)}>Disable auto-charge</button>}
+    {['ACTIVE','PAST_DUE','PAYMENT_METHOD_REQUIRED','RENEWAL_REVIEW_REQUIRED'].includes(s.status)?<button type="button" className="danger-inline" disabled={!!working} onClick={()=>stop(s)}>Stop subscription & reminders</button>:<span className="muted">{s.status==='CANCELLED'?'Stopped':'Finance review required'}</span>}</div></td>
   </>}/>
+  <p className="muted small">Automatic charges: {operations?.renewalsEnabled?'globally enabled':'globally paused'}. Manual reminders are separate and remain active while the subscription is unpaid. Do not re-enable Auto-charge without fresh client authorization.</p>
  </div>;
 }
 function Approvals({rows,onSave}){const [drafts,setDrafts]=useState({}),[state,setState]=useState('');async function save(x,approved){try{await api('admin/settings',{key:x.key,value:drafts[x.key]??String(x.value??''),status:approved?'APPROVED':'NEEDS_APPROVAL'});setState('Saved securely.');onSave()}catch(e){setState(e.message)}}const pending=rows.filter(x=>x.status!=='APPROVED').length;return <><div className="approval-head"><div><div className="eyebrow">CEO & FINANCE / INFORMATION REGISTER</div><h2>Required information & approvals</h2><p>Complete these details with the CEO and Finance team. Nothing unapproved appears on the public payment pages.</p></div><div className="approval-stat"><b>{pending}</b><small>items awaiting approval</small></div></div>{state&&<p className="notice">{state}</p>}<div className="approval-list">{rows.map(x=><div className="approval-item" key={x.key}><div className="approval-meta"><div className="approval-title"><strong>{fields[x.key]?.[0]||x.key}</strong><Status value={x.status}/></div><p>{fields[x.key]?.[1]||'Administrative billing information'}</p><small>Last updated: {date(x.updated_at)}</small></div><div className="approval-editor"><textarea rows="2" value={drafts[x.key]??String(x.value??'')} onChange={e=>setDrafts({...drafts,[x.key]:e.target.value})} placeholder="Enter the confirmed details or policy reference"/><div className="row-inline"><button className="button secondary" onClick={()=>save(x,false)}>Save draft</button><button className="button primary" onClick={()=>save(x,true)}>Mark approved</button></div></div></div>)}</div></>}
