@@ -40,7 +40,11 @@ export default function PayFlow({token,offer}){
   }catch(e){setError(e.message);setBusy(false)}
  }
  const summaryReady=!!quote;
- const hasFutureCharges=recurring&&quote?.cycles>1;
+ const termMonths={MONTHLY_FLEX:1,COMMIT_3M:3,COMMIT_6M:6,COMMIT_12M:12};
+ const cadenceMonths={MONTHLY:1,QUARTERLY:3,SEMIANNUAL:6,ANNUAL_UPFRONT:12};
+ const hasFutureCharges=recurring&&!!term&&!!cadence&&(
+  term==='MONTHLY_FLEX'?!!offer.autoRenew:(termMonths[term]||0)>(cadenceMonths[cadence]||0)
+ );
  const autoAvailable=!!offer.allowAutoCharge&&!!offer.autoChargeOperational&&hasFutureCharges&&cadence==='MONTHLY';
  return <div className="container pay-layout">
   <section className="pay-main">
