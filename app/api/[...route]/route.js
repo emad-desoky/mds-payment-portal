@@ -209,7 +209,16 @@ export async function POST(req,{params}){
      const details=await startPayment(payment,{id:offer.client_id,billing_email:offer.billing_email,locale:offer.locale},offer);
      await q('update payment_requests set session_id=$1,gateway_url=$2 where id=$3',[details.id,details.url,payment.id]);
      return ok({checkoutUrl:details.url,reference:payment.public_reference});
-    }catch(e){await q('update payment_requests set status=$1 where id=$2',['FAILED',payment.id]);throw e}
+    }catch(e){
+     await q('update payment_requests set status=$1 where id=$2',['FAILED',payment.id]);
+     if(calc.collectionMethod==='AUTO'&&(['KASHIER_HTTP_400','KASHIER_HTTP_401','KASHIER_HTTP_403','KASHIER_INVALID_RESPONSE'].includes(e?.code))){
+      // Live merchant accounts can accept card payments without supporting tokenization.
+      // Don't lose the invoice: allow the client to choose one-time checkout by disabling auto-renew.
+      console.error('[MDS:auto-agreement:unavailable]',{offerId:offer.id,code:e?.code,providerCode:e?.providerCode||null});
+      throw Object.assign(Error('Kashier could not activate automatic card billing for this invoice. Switch Auto-renew OFF and continue with secure one-time payment, or contact MDS Finance.'),{status:502,code:'AUTO_RENEW_SETUP_REJECTED'});
+     }
+     throw e;
+    }
   }
   if(p==='manual-cycle/checkout'){
     await rateLimit('manual-cycle-checkout',12,30);

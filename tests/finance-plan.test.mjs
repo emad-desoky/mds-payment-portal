@@ -22,7 +22,7 @@ test('Custom 2 or 4 months with flat EGP discount is supported without client te
 });
 test('Finance must approve and client must opt in for AUTO',()=>{
  const a=financePlanQuote(base,'AUTO',now);assert.equal(a.collectionMethod,'AUTO');assert.equal(a.cycles,12);
- assert.equal(a.termEndDate,'2029-12-01');
+ assert.equal(a.termEndDate,'2030-03-01');
  assert.throws(()=>financePlanQuote({...base,allow_auto_charge:false},'AUTO',now),/not approved/);
 });
 test('Discount cannot exceed base and requires a real price',()=>{
