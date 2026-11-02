@@ -95,6 +95,10 @@ create table if not exists auth_attempts (
 alter table public.offers add column if not exists first_monthly_renewal_date date;
 alter table public.subscriptions add column if not exists renewal_anchor_day smallint;
 alter table public.offers add column if not exists allow_auto_charge boolean not null default false;
+alter table public.offers add column if not exists billing_period_months integer;
+alter table public.offers add column if not exists plan_discount_type text not null default 'NONE';
+alter table public.offers add column if not exists plan_discount_value numeric(14,2) not null default 0;
+alter table public.subscriptions add column if not exists billing_period_months integer not null default 1;
 alter table public.subscriptions add column if not exists collection_method text not null default 'MANUAL';
 alter table public.subscriptions add column if not exists rolling_manual boolean not null default false;
 alter table public.subscriptions add column if not exists auto_charge_consent_at timestamptz;
